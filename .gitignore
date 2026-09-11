@@ -1,0 +1,64 @@
+# =========================
+# Secrets / environment
+# =========================
+.env
+.env.*
+!.env.example
+
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# =========================
+# Java / Spring Boot
+# =========================
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Maven wrapper jar is usually okay to keep, but ignore backup junk
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar.sha256
+
+# =========================
+# Local database files
+# =========================
+data/
+*.db
+*.mv.db
+*.trace.db
+
+# =========================
+# Debug output
+# =========================
+debug-rankings/
+logs/
+*.log
+
+# =========================
+# Node / Vite frontend
+# =========================
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# IntelliJ / IDE files
+# =========================
+.idea/
+*.iml
+out/
+
+# =========================
+# OS junk
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini

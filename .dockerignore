@@ -1,0 +1,15 @@
+.git
+.idea
+target
+data
+debug-rankings
+
+.env
+.env.*
+!.env.example
+
+frontend/node_modules
+frontend/dist
+
+*.iml
+.DS_Store

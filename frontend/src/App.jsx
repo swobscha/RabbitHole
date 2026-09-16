@@ -365,7 +365,7 @@ function App() {
     }
 
     function connectSpotify() {
-        window.open("http://127.0.0.1:8080/api/spotify/login", "_blank");
+        window.open(apiUrl("/api/spotify/login"), "_self");
 
         setTimeout(checkSpotifyStatus, 2000);
         setTimeout(checkSpotifyStatus, 5000);

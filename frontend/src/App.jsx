@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+const LOCAL_API_BASE_URL = "http://localhost:8080";
+const PRODUCTION_API_BASE_URL = "https://spotify-bot-giik.onrender.com";
+
+const isLocalFrontend =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
+
+const API_BASE_URL =
+    import.meta.env.VITE_API_BASE_URL ||
+    (isLocalFrontend ? LOCAL_API_BASE_URL : PRODUCTION_API_BASE_URL);
 
 function apiUrl(path) {
     const cleanBaseUrl = API_BASE_URL.replace(/\/+$/, "");
@@ -98,7 +107,7 @@ function App() {
     }
 
     function backendOfflineMessage() {
-        return "Could not reach the backend. Make sure Spring Boot is running on http://localhost:8080.";
+        return `Could not reach the backend at ${API_BASE_URL}. Please try again in a moment.`;
     }
 
     async function readApiError(response, fallbackMessage) {
@@ -283,7 +292,7 @@ function App() {
 
     async function checkSpotifyStatus() {
         try {
-            const response = await fetch("http://localhost:8080/api/spotify/status");
+            const response = await fetch(apiUrl("/api/spotify/status"));
 
             if (!response.ok) {
                 setSpotifyConnected(false);
@@ -299,7 +308,7 @@ function App() {
 
     async function fetchPlaylistHistory() {
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/history");
+            const response = await fetch(apiUrl("/api/playlists/history"));
 
             if (!response.ok) {
                 return;
@@ -314,7 +323,7 @@ function App() {
 
     async function clearPlaylistHistory() {
         try {
-            await fetch("http://localhost:8080/api/playlists/history", {
+            await fetch(apiUrl("/api/playlists/history"), {
                 method: "DELETE",
             });
 
@@ -341,9 +350,9 @@ function App() {
 
         try {
             const response = await fetch(
-                `http://localhost:8080/api/spotify/artists/search?query=${encodeURIComponent(
-                    seedArtist
-                )}`
+                apiUrl(
+                    `/api/spotify/artists/search?query=${encodeURIComponent(seedArtist)}`
+                )
             );
 
             if (!response.ok) {
@@ -365,11 +374,7 @@ function App() {
     }
 
     function connectSpotify() {
-        window.open(apiUrl("/api/spotify/login"), "_self");
-
-        setTimeout(checkSpotifyStatus, 2000);
-        setTimeout(checkSpotifyStatus, 5000);
-        setTimeout(checkSpotifyStatus, 8000);
+        window.location.href = apiUrl("/api/spotify/login");
     }
 
     useEffect(() => {
@@ -414,7 +419,7 @@ function App() {
         const requestBody = buildGenerationRequest();
 
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/generate", {
+            const response = await fetch(apiUrl("/api/playlists/generate"), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -469,7 +474,7 @@ function App() {
         };
 
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/generate", {
+            const response = await fetch(apiUrl("/api/playlists/generate"), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -532,7 +537,7 @@ function App() {
         };
 
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/create", {
+            const response = await fetch(apiUrl("/api/playlists/create"), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

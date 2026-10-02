@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+const LOCAL_API_BASE_URL = "http://localhost:8080";
+const PRODUCTION_API_BASE_URL = "https://spotify-bot-giik.onrender.com";
+
+const isLocalFrontend =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
+
+const API_BASE_URL =
+    import.meta.env.VITE_API_BASE_URL ||
+    (isLocalFrontend ? LOCAL_API_BASE_URL : PRODUCTION_API_BASE_URL);
 
 function apiUrl(path) {
     const cleanBaseUrl = API_BASE_URL.replace(/\/+$/, "");
@@ -98,7 +107,7 @@ function App() {
     }
 
     function backendOfflineMessage() {
-        return "Could not reach the backend. Make sure Spring Boot is running on http://localhost:8080.";
+        return `Could not reach the backend at ${API_BASE_URL}. Please try again in a moment.`;
     }
 
     async function readApiError(response, fallbackMessage) {
@@ -283,7 +292,7 @@ function App() {
 
     async function checkSpotifyStatus() {
         try {
-            const response = await fetch("http://localhost:8080/api/spotify/status");
+            const response = await fetch(apiUrl("/api/spotify/status"));
 
             if (!response.ok) {
                 setSpotifyConnected(false);
@@ -299,7 +308,7 @@ function App() {
 
     async function fetchPlaylistHistory() {
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/history");
+            const response = await fetch(apiUrl("/api/playlists/history"));
 
             if (!response.ok) {
                 return;
@@ -314,7 +323,7 @@ function App() {
 
     async function clearPlaylistHistory() {
         try {
-            await fetch("http://localhost:8080/api/playlists/history", {
+            await fetch(apiUrl("/api/playlists/history"), {
                 method: "DELETE",
             });
 
@@ -341,9 +350,9 @@ function App() {
 
         try {
             const response = await fetch(
-                `http://localhost:8080/api/spotify/artists/search?query=${encodeURIComponent(
-                    seedArtist
-                )}`
+                apiUrl(
+                    `/api/spotify/artists/search?query=${encodeURIComponent(seedArtist)}`
+                )
             );
 
             if (!response.ok) {
@@ -365,11 +374,7 @@ function App() {
     }
 
     function connectSpotify() {
-        window.open(apiUrl("/api/spotify/login"), "_self");
-
-        setTimeout(checkSpotifyStatus, 2000);
-        setTimeout(checkSpotifyStatus, 5000);
-        setTimeout(checkSpotifyStatus, 8000);
+        window.location.href = apiUrl("/api/spotify/login");
     }
 
     useEffect(() => {
@@ -414,7 +419,7 @@ function App() {
         const requestBody = buildGenerationRequest();
 
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/generate", {
+            const response = await fetch(apiUrl("/api/playlists/generate"), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -469,7 +474,7 @@ function App() {
         };
 
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/generate", {
+            const response = await fetch(apiUrl("/api/playlists/generate"), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -532,7 +537,7 @@ function App() {
         };
 
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/create", {
+            const response = await fetch(apiUrl("/api/playlists/create"), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -588,319 +593,171 @@ function App() {
         setReplaceError("");
     }
 
-    const artistPickerRowStyle = {
-        display: "flex",
-        flexDirection: "row",
-        flexWrap: "nowrap",
-        gap: "12px",
-        width: "100%",
-        maxWidth: "100%",
-        overflowX: "auto",
-        overflowY: "hidden",
-        padding: "12px 0",
-        alignItems: "stretch",
-    };
-
-    function artistCardStyle(artist) {
-        const selected = selectedSeedArtist?.id === artist.id;
-
-        return {
-            flex: "0 0 120px",
-            width: "120px",
-            minWidth: "120px",
-            maxWidth: "120px",
-            height: "190px",
-            boxSizing: "border-box",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            gap: "6px",
-            padding: "8px",
-            border: selected
-                ? "2px solid #1db954"
-                : "1px solid rgba(255,255,255,0.22)",
-            borderRadius: "14px",
-            background: selected
-                ? "rgba(29,185,84,0.18)"
-                : "rgba(255,255,255,0.06)",
-            color: "white",
-            cursor: "pointer",
-            textAlign: "center",
-            boxShadow: selected ? "0 0 0 2px rgba(29,185,84,0.25)" : "none",
-        };
-    }
-
-    const artistImageStyle = {
-        width: "82px",
-        height: "82px",
-        minWidth: "82px",
-        minHeight: "82px",
-        maxWidth: "82px",
-        maxHeight: "82px",
-        borderRadius: "999px",
-        objectFit: "cover",
-        display: "block",
-        flexShrink: 0,
-    };
-
-    const artistPlaceholderStyle = {
-        ...artistImageStyle,
-        display: "grid",
-        placeItems: "center",
-        background: "rgba(255,255,255,0.12)",
-        fontSize: "28px",
-        fontWeight: 700,
-    };
-
-    const artistNameStyle = {
-        width: "100%",
-        fontSize: "12px",
-        lineHeight: "1.1",
-        fontWeight: 700,
-        overflowWrap: "anywhere",
-    };
-
-    const artistMetaStyle = {
-        width: "100%",
-        fontSize: "10px",
-        lineHeight: "1.1",
-        opacity: 0.78,
-        overflowWrap: "anywhere",
-    };
-
     return (
-        <main className="page">
-            <section className="hero">
-                <h1>Spotify Bot Playlist Manager</h1>
-                <p>Create a weighted playlist using Last.fm discovery and Spotify output.</p>
+        <main>
+            <h1>Spotify Bot</h1>
+            <p>
+                Backend: <code>{API_BASE_URL}</code>
+            </p>
 
-                <div className="spotify-status-card">
-                    <p>
-                        Spotify Status:{" "}
-                        <strong className={spotifyConnected ? "connected" : "not-connected"}>
-                            {spotifyConnected ? "Connected" : "Not Connected"}
-                        </strong>
-                    </p>
-
-                    <div className="spotify-buttons">
-                        <button type="button" onClick={connectSpotify}>
-                            Connect Spotify
-                        </button>
-
-                        <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={checkSpotifyStatus}
-                        >
-                            Refresh Status
-                        </button>
-                    </div>
-                </div>
+            <section>
+                <h2>Spotify</h2>
+                <p>
+                    Status: <strong>{spotifyConnected ? "Connected" : "Not connected"}</strong>
+                </p>
+                <button type="button" onClick={connectSpotify}>Connect Spotify</button>
+                <button type="button" onClick={checkSpotifyStatus}>Refresh Status</button>
             </section>
 
-            <section className="panel">
-                <form onSubmit={generatePlaylist} className="form">
-                    <label>
-                        Seed Artist
-                        <input
-                            value={seedArtist}
-                            onChange={handleSeedArtistChange}
-                            placeholder="Daft Punk"
-                        />
-                    </label>
+            <hr />
 
-                    <div className="seed-artist-search">
-                        <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={searchSeedArtists}
-                            disabled={artistSearchLoading || !spotifyConnected}
-                        >
-                            {artistSearchLoading ? "Searching..." : "Find Matching Artists"}
-                        </button>
+            <section>
+                <h2>Build Playlist</h2>
 
-                        {selectedSeedArtist && (
-                            <p className="selected-seed-artist">
-                                Selected seed artist: <strong>{selectedSeedArtist.name}</strong>
-                            </p>
-                        )}
+                <form onSubmit={generatePlaylist}>
+                    <label htmlFor="seedArtist">Seed Artist</label>
+                    <input
+                        id="seedArtist"
+                        value={seedArtist}
+                        onChange={handleSeedArtistChange}
+                        placeholder="Daft Punk"
+                    />
 
-                        {artistSearchError && <p className="error">{artistSearchError}</p>}
-                    </div>
+                    <button
+                        type="button"
+                        onClick={searchSeedArtists}
+                        disabled={artistSearchLoading || !spotifyConnected}
+                    >
+                        {artistSearchLoading ? "Searching..." : "Find Matching Artists"}
+                    </button>
+
+                    {artistSearchError && <p className="error">{artistSearchError}</p>}
 
                     {seedArtistOptions.length > 0 && (
-                        <div style={artistPickerRowStyle}>
-                            {seedArtistOptions.slice(0, 5).map((artist) => (
-                                <div
+                        <div>
+                            <p>Select the correct Spotify artist:</p>
+                            {seedArtistOptions.map((artist) => (
+                                <button
                                     key={artist.id}
-                                    role="button"
-                                    tabIndex={0}
-                                    style={artistCardStyle(artist)}
+                                    type="button"
+                                    className={selectedSeedArtist?.id === artist.id ? "selected" : ""}
                                     onClick={() => setSelectedSeedArtist(artist)}
-                                    onKeyDown={(event) => {
-                                        if (event.key === "Enter" || event.key === " ") {
-                                            event.preventDefault();
-                                            setSelectedSeedArtist(artist);
-                                        }
-                                    }}
                                 >
-                                    {artist.imageUrl ? (
-                                        <img
-                                            src={artist.imageUrl}
-                                            alt={artist.name}
-                                            style={artistImageStyle}
-                                        />
-                                    ) : (
-                                        <div style={artistPlaceholderStyle}>?</div>
-                                    )}
-
-                                    <strong style={artistNameStyle}>{artist.name}</strong>
-
-                                    <span style={artistMetaStyle}>
-                    {formatNumber(artist.followers)} followers
-                  </span>
-
-                                    <small style={artistMetaStyle}>
-                                        {artist.genres && artist.genres.length > 0
-                                            ? artist.genres.slice(0, 3).join(", ")
-                                            : "No genres listed"}
-                                    </small>
-                                </div>
+                                    {artist.name} — {formatNumber(artist.followers)} followers
+                                </button>
                             ))}
                         </div>
                     )}
 
-                    <label>
-                        Playlist Name
-                        <input
-                            value={playlistName}
-                            onChange={(event) => setPlaylistName(event.target.value)}
-                            placeholder="Niche Discovery Test"
-                        />
-                    </label>
+                    {selectedSeedArtist && (
+                        <p>Selected: <strong>{selectedSeedArtist.name}</strong></p>
+                    )}
 
-                    <label>
-                        Playlist Size
-                        <input
-                            type="number"
-                            min="1"
-                            max="50"
-                            value={playlistSize}
-                            onChange={(event) => setPlaylistSize(event.target.value)}
-                        />
-                    </label>
+                    <label htmlFor="playlistName">Playlist Name</label>
+                    <input
+                        id="playlistName"
+                        value={playlistName}
+                        onChange={(event) => setPlaylistName(event.target.value)}
+                    />
 
+                    <label htmlFor="playlistSize">Playlist Size</label>
+                    <input
+                        id="playlistSize"
+                        type="number"
+                        min="1"
+                        max="50"
+                        value={playlistSize}
+                        onChange={(event) => setPlaylistSize(event.target.value)}
+                    />
+
+                    <p>Presets</p>
                     <div>
-                        <p>Presets</p>
-
-                        <div className="spotify-buttons">
-                            {presets.map((preset) => (
-                                <button
-                                    key={preset.name}
-                                    type="button"
-                                    className="secondary-button"
-                                    onClick={() => applyPreset(preset)}
-                                    title={preset.description}
-                                >
-                                    {preset.name}
-                                </button>
-                            ))}
-                        </div>
+                        {presets.map((preset) => (
+                            <button
+                                key={preset.name}
+                                type="button"
+                                onClick={() => applyPreset(preset)}
+                                title={preset.description}
+                            >
+                                {preset.name}
+                            </button>
+                        ))}
                     </div>
 
-                    <label className="checkbox-label">
+                    <label className="checkbox-row">
                         <input
                             type="checkbox"
                             checked={avoidUsedTracks}
                             onChange={(event) => setAvoidUsedTracks(event.target.checked)}
                         />
-                        Avoid songs already used in previous playlists
+                        Avoid songs already used
                     </label>
 
                     <button
                         type="button"
-                        className="secondary-button"
                         onClick={() => setAdvancedOpen((current) => !current)}
                     >
                         {advancedOpen ? "Hide Advanced Settings" : "Show Advanced Settings"}
                     </button>
 
-                    {!advancedOpen && (
-                        <p className="helper-text">
-                            Advanced filters and sliders are hidden. Current settings:
-                            popularity {formatPopularityScale(popularityScale)}, similarity{" "}
-                            {formatSimilarityScale(similarityScale)}, randomness{" "}
-                            {formatSliderValue(randomness)}.
-                        </p>
-                    )}
-
                     {advancedOpen && (
-                        <div className="advanced-settings">
-                            <label>
-                                Restricted Artists
-                                <input
-                                    value={restrictedArtists}
-                                    onChange={(event) => setRestrictedArtists(event.target.value)}
-                                    placeholder="Artist One, Artist Two"
-                                />
-                            </label>
+                        <div>
+                            <label htmlFor="restrictedArtists">Restricted Artists</label>
+                            <input
+                                id="restrictedArtists"
+                                value={restrictedArtists}
+                                onChange={(event) => setRestrictedArtists(event.target.value)}
+                                placeholder="Artist One, Artist Two"
+                            />
 
-                            <label>
-                                Preferred Artists
-                                <input
-                                    value={preferredArtists}
-                                    onChange={(event) => setPreferredArtists(event.target.value)}
-                                    placeholder="Justice, Kavinsky"
-                                />
-                            </label>
+                            <label htmlFor="preferredArtists">Preferred Artists</label>
+                            <input
+                                id="preferredArtists"
+                                value={preferredArtists}
+                                onChange={(event) => setPreferredArtists(event.target.value)}
+                                placeholder="Justice, Kavinsky"
+                            />
 
-                            <label>
-                                Preferred Genres / Tags
-                                <input
-                                    value={preferredGenres}
-                                    onChange={(event) => setPreferredGenres(event.target.value)}
-                                    placeholder="electronic, dance, house"
-                                />
-                            </label>
+                            <label htmlFor="preferredGenres">Preferred Genres / Tags</label>
+                            <input
+                                id="preferredGenres"
+                                value={preferredGenres}
+                                onChange={(event) => setPreferredGenres(event.target.value)}
+                                placeholder="electronic, dance, house"
+                            />
 
-                            <label>
-                                Randomness: {formatSliderValue(randomness)}
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="1"
-                                    step="0.1"
-                                    value={randomness}
-                                    onChange={(event) => setRandomness(event.target.value)}
-                                />
-                            </label>
+                            <label htmlFor="randomness">Randomness: {Number(randomness).toFixed(1)}</label>
+                            <input
+                                id="randomness"
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.1"
+                                value={randomness}
+                                onChange={(event) => setRandomness(event.target.value)}
+                            />
 
-                            <label>
-                                Popularity: {formatPopularityScale(popularityScale)}
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="1"
-                                    step="0.1"
-                                    value={popularityScale}
-                                    onChange={(event) => setPopularityScale(event.target.value)}
-                                />
-                                <span>High Streams &larr; Balanced &rarr; Low Streams</span>
-                            </label>
+                            <label htmlFor="popularity">Popularity / obscurity: {Number(popularityScale).toFixed(1)}</label>
+                            <input
+                                id="popularity"
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.1"
+                                value={popularityScale}
+                                onChange={(event) => setPopularityScale(event.target.value)}
+                            />
 
-                            <label>
-                                Similarity to Seed Artist: {formatSimilarityScale(similarityScale)}
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="1"
-                                    step="0.1"
-                                    value={similarityScale}
-                                    onChange={(event) => setSimilarityScale(event.target.value)}
-                                />
-                                <span>Farther &larr; Balanced &rarr; Closer</span>
-                            </label>
+                            <label htmlFor="similarity">Similarity to seed: {Number(similarityScale).toFixed(1)}</label>
+                            <input
+                                id="similarity"
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.1"
+                                value={similarityScale}
+                                onChange={(event) => setSimilarityScale(event.target.value)}
+                            />
                         </div>
                     )}
 
@@ -911,197 +768,122 @@ function App() {
                         {loading ? "Generating..." : "Generate Playlist"}
                     </button>
 
-                    {!selectedSeedArtist && (
-                        <p className="helper-text">
-                            Search and select the correct Spotify seed artist before generating.
-                        </p>
-                    )}
-
                     {error && <p className="error">{error}</p>}
                 </form>
             </section>
 
             {playlist && (
-                <section className="playlist">
-                    <div className="playlist-title-row">
-                        <div>
-                            <h2>{playlist.playlistName}</h2>
-                            <p>Seed artist: {playlist.seedArtist}</p>
-                            <p>Tracks selected: {playlist.tracks.length}</p>
-                        </div>
+                <>
+                    <hr />
+                    <section>
+                        <h2>{playlist.playlistName}</h2>
+                        <p>Seed artist: {playlist.seedArtist}</p>
+                        <p>Tracks: {playlist.tracks.length}</p>
 
-                        <div className="playlist-actions">
-                            <button
-                                onClick={createPlaylist}
-                                disabled={creating || playlist.tracks.length === 0 || !spotifyConnected}
-                            >
-                                {creating ? "Creating..." : "Create Playlist"}
-                            </button>
+                        <button
+                            type="button"
+                            onClick={createPlaylist}
+                            disabled={creating || playlist.tracks.length === 0 || !spotifyConnected}
+                        >
+                            {creating ? "Creating..." : "Create Playlist on Spotify"}
+                        </button>
 
-                            <button className="secondary-button" onClick={clearPlaylist}>
-                                Clear
-                            </button>
-                        </div>
-                    </div>
+                        <button type="button" onClick={clearPlaylist}>Clear Playlist</button>
 
-                    {createError && <p className="error">{createError}</p>}
-                    {replaceError && <p className="error">{replaceError}</p>}
+                        {createError && <p className="error">{createError}</p>}
+                        {replaceError && <p className="error">{replaceError}</p>}
 
-                    {playlist.tracks.length === 0 && (
-                        <p className="error">
-                            No tracks selected. Generate again or adjust your filters.
-                        </p>
-                    )}
+                        {createdPlaylist && (
+                            <div className="success">
+                                <p><strong>{createdPlaylist.status}</strong></p>
+                                <p>{createdPlaylist.playlistName}</p>
+                                <p>Tracks added: {createdPlaylist.trackCount}</p>
+                                <a href={createdPlaylist.spotifyPlaylistUrl} target="_blank" rel="noreferrer">
+                                    Open Spotify Playlist
+                                </a>
+                            </div>
+                        )}
 
-                    {createdPlaylist && (
-                        <div className="success-card">
-                            <h3>{createdPlaylist.status}</h3>
-                            <p>Playlist: {createdPlaylist.playlistName}</p>
-                            <p>Tracks added: {createdPlaylist.trackCount}</p>
-                            <a
-                                href={createdPlaylist.spotifyPlaylistUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                            >
-                                Open Spotify Playlist
-                            </a>
-                        </div>
-                    )}
+                        <ol>
+                            {playlist.tracks.map((item, index) => {
+                                const spotifyUrl = spotifyTrackUrl(item.track);
 
-                    <div className="track-list">
-                        {playlist.tracks.map((item, index) => {
-                            const spotifyUrl = spotifyTrackUrl(item.track);
+                                return (
+                                    <li key={`${item.track.spotifyUri || item.track.id || item.track.name}-${index}`}>
+                                        <h3>{item.track.name}</h3>
+                                        <p>{item.track.artistName}</p>
 
-                            return (
-                                <div
-                                    className="track-card"
-                                    key={`${item.track.spotifyUri || item.track.id || item.track.name}-${index}`}
-                                >
-                                    <div className="track-header">
-                                        <span className="rank">#{index + 1}</span>
+                                        <details>
+                                            <summary>Track details</summary>
+                                            <p>Score: {Number(item.score).toFixed(2)}</p>
+                                            <p>Track plays: {formatNumber(item.track.trackPlaycount)}</p>
+                                            <p>Track listeners: {formatNumber(item.track.trackListeners)}</p>
+                                            <p>Artist plays: {formatNumber(item.track.artistPlaycount)}</p>
+                                            <p>Artist listeners: {formatNumber(item.track.artistListeners)}</p>
+                                            <p>Artist similarity: {formatSimilarity(item.track.artistSimilarity)}</p>
+                                            {(item.track.genres || []).length > 0 && (
+                                                <p>Genres: {item.track.genres.join(", ")}</p>
+                                            )}
+                                            {(item.reasons || []).length > 0 && (
+                                                <ul>
+                                                    {item.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                                                </ul>
+                                            )}
+                                        </details>
+
+                                        {spotifyUrl && (
+                                            <a href={spotifyUrl} target="_blank" rel="noreferrer">
+                                                Open Track in Spotify
+                                            </a>
+                                        )}
 
                                         <div>
-                                            <h3>{item.track.name}</h3>
-                                            <p>{item.track.artistName}</p>
+                                            <button
+                                                type="button"
+                                                onClick={() => replaceTrack(index)}
+                                                disabled={replacingTrackIndex !== null}
+                                            >
+                                                {replacingTrackIndex === index ? "Replacing..." : "Replace"}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => removeTrack(item.track.id, item.track.spotifyUri, index)}
+                                            >
+                                                Remove
+                                            </button>
                                         </div>
-                                    </div>
-
-                                    <p className="score">Score: {Number(item.score).toFixed(2)}</p>
-
-                                    {spotifyUrl && (
-                                        <p>
-                                            <a href={spotifyUrl} target="_blank" rel="noreferrer">
-                                                Open in Spotify
-                                            </a>
-                                        </p>
-                                    )}
-
-                                    <div className="genres">
-                                        {(item.track.genres || []).map((genre) => (
-                                            <span key={genre}>{genre}</span>
-                                        ))}
-                                    </div>
-
-                                    <div className="metadata">
-                                        <p>
-                                            <strong>Track plays:</strong>{" "}
-                                            {formatNumber(item.track.trackPlaycount)}
-                                        </p>
-
-                                        <p>
-                                            <strong>Track listeners:</strong>{" "}
-                                            {formatNumber(item.track.trackListeners)}
-                                        </p>
-
-                                        <p>
-                                            <strong>Artist plays:</strong>{" "}
-                                            {formatNumber(item.track.artistPlaycount)}
-                                        </p>
-
-                                        <p>
-                                            <strong>Artist listeners:</strong>{" "}
-                                            {formatNumber(item.track.artistListeners)}
-                                        </p>
-
-                                        <p>
-                                            <strong>Artist similarity:</strong>{" "}
-                                            {formatSimilarity(item.track.artistSimilarity)}
-                                        </p>
-
-                                        <p>
-                                            <strong>Spotify URI:</strong>{" "}
-                                            {item.track.spotifyUri ? "Validated" : "Missing"}
-                                        </p>
-                                    </div>
-
-                                    <ul>
-                                        {(item.reasons || []).map((reason) => (
-                                            <li key={reason}>{reason}</li>
-                                        ))}
-                                    </ul>
-
-                                    <div className="spotify-buttons">
-                                        <button
-                                            type="button"
-                                            className="secondary-button"
-                                            onClick={() => replaceTrack(index)}
-                                            disabled={replacingTrackIndex !== null}
-                                        >
-                                            {replacingTrackIndex === index ? "Replacing..." : "Replace Track"}
-                                        </button>
-
-                                        <button
-                                            className="remove-button"
-                                            onClick={() =>
-                                                removeTrack(item.track.id, item.track.spotifyUri, index)
-                                            }
-                                        >
-                                            Remove Track
-                                        </button>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </section>
+                                    </li>
+                                );
+                            })}
+                        </ol>
+                    </section>
+                </>
             )}
 
-            <section className="playlist history-section">
-                <div className="playlist-title-row">
-                    <div>
-                        <h2>Playlist History</h2>
-                        <p>Recently created Spotify playlists from this session.</p>
-                    </div>
+            <hr />
 
-                    <div className="playlist-actions">
-                        <button className="secondary-button" onClick={fetchPlaylistHistory}>
-                            Refresh History
-                        </button>
+            <section>
+                <h2>Playlist History</h2>
+                <button type="button" onClick={fetchPlaylistHistory}>Refresh History</button>
+                <button type="button" onClick={clearPlaylistHistory}>Clear History</button>
 
-                        <button className="remove-button" onClick={clearPlaylistHistory}>
-                            Clear History
-                        </button>
-                    </div>
-                </div>
-
-                {playlistHistory.length === 0 && (
-                    <p className="empty-history">No playlists created yet.</p>
+                {playlistHistory.length === 0 ? (
+                    <p>No playlists created yet.</p>
+                ) : (
+                    <ul>
+                        {playlistHistory.map((item) => (
+                            <li key={item.id}>
+                                <strong>{item.playlistName}</strong>
+                                <p>Seed artist: {item.seedArtist || "Unknown"}</p>
+                                <p>Tracks: {item.trackCount}</p>
+                                <p>Created: {new Date(item.createdAt).toLocaleString()}</p>
+                                <a href={item.spotifyPlaylistUrl} target="_blank" rel="noreferrer">
+                                    Open in Spotify
+                                </a>
+                            </li>
+                        ))}
+                    </ul>
                 )}
-
-                <div className="history-list">
-                    {playlistHistory.map((item) => (
-                        <div className="history-card" key={item.id}>
-                            <h3>{item.playlistName}</h3>
-                            <p>Seed artist: {item.seedArtist || "Unknown"}</p>
-                            <p>Tracks added: {item.trackCount}</p>
-                            <p>Created: {new Date(item.createdAt).toLocaleString()}</p>
-
-                            <a href={item.spotifyPlaylistUrl} target="_blank" rel="noreferrer">
-                                Open in Spotify
-                            </a>
-                        </div>
-                    ))}
-                </div>
             </section>
         </main>
     );

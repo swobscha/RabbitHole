@@ -624,6 +624,7 @@ function App() {
                     />
 
                     <button
+                        className="wide-button"
                         type="button"
                         onClick={searchSeedArtists}
                         disabled={artistSearchLoading || !spotifyConnected}
@@ -694,6 +695,7 @@ function App() {
                     </label>
 
                     <button
+                        className="wide-button"
                         type="button"
                         onClick={() => setAdvancedOpen((current) => !current)}
                     >
@@ -763,6 +765,7 @@ function App() {
 
                     <button
                         type="submit"
+                        className="wide-button"
                         disabled={loading || !spotifyConnected || !selectedSeedArtist}
                     >
                         {loading ? "Generating..." : "Generate Playlist"}

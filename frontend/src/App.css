@@ -108,6 +108,13 @@ button.selected {
   background: #38df38;
 }
 
+.spotify-disconnected-button:hover img,
+.spotify-connected-button:hover img {
+  transform: translateY(-3px);
+
+
+}
+
 .spotify-disconnected-button {
   width: min(900px, calc(100% - 32px));
   padding: 8px;

@@ -609,7 +609,7 @@ function App() {
 
                         className={spotifyConnected ? "spotify-connected-button" : "spotify-disconnected-button"}
                         onClick={connectSpotify}>
-                        <img src="/spotify-icon.png" alt="" />
+                        <img src="/assets/spotify-icon.png" alt="" />
                         Connect Spotify</button>
 
                 <button type="button" className="wide-button" onClick={checkSpotifyStatus}>Refresh Status</button>

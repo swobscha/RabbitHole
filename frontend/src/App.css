@@ -28,11 +28,12 @@
   box-sizing: border-box;
 }
 
+
 body {
   margin: 0;
   font-family: Arial, sans-serif;
   color: #ffffff;
-  background: #204e20;
+  background: #121111;
 }
 
 main {
@@ -99,6 +100,21 @@ button.selected {
   padding: 8px;
   margin: 0 auto;
 }
+
+.spotify-connected-button {
+  width: min(900px, calc(100% - 32px));
+  padding: 8px;
+  margin: 0 auto;
+  background: #38df38;
+}
+
+.spotify-disconnected-button {
+  width: min(900px, calc(100% - 32px));
+  padding: 8px;
+  margin: 0 auto;
+  background: #7f1d1d;
+}
+
 ol,
 ul {
   padding-left: 24px;

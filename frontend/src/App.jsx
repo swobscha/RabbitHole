@@ -605,8 +605,10 @@ function App() {
                 <p>
                     Status: <strong>{spotifyConnected ? "Connected" : "Not connected"}</strong>
                 </p>
-                <button type="button" onClick={connectSpotify}>Connect Spotify</button>
-                <button type="button" onClick={checkSpotifyStatus}>Refresh Status</button>
+                <button type="button"
+                        className={spotifyConnected ? "spotify-connected-button" : "spotify-disconnected-button"}
+                        onClick={connectSpotify}>Connect Spotify</button>
+                <button type="button" className="wide-button" onClick={checkSpotifyStatus}>Refresh Status</button>
             </section>
 
             <hr />
@@ -765,6 +767,7 @@ function App() {
 
                     <button
                         type="submit"
+
                         className="wide-button"
                         disabled={loading || !spotifyConnected || !selectedSeedArtist}
                     >

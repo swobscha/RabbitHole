@@ -39,21 +39,21 @@ body {
   min-height: 100vh;
   background:
           radial-gradient(
-                  ellipse 90% 70% at 50% 25%,
-                  rgba(0, 0, 0, 0.98),
-                  transparent 0%
+                  ellipse 80% 60% at 50% 25%,
+                  rgba(0, 0, 0, 0.65),
+                  transparent 70%
           ),
           radial-gradient(
-                  ellipse 60% 45% at 12% 12%,
-                  rgba(122, 211, 92, 0.12),
-                  transparent 90%
+                  ellipse 70% 55% at 15% 15%,
+                  rgba(70, 180, 70, 0.28),
+                  transparent 70%
           ),
           radial-gradient(
-                  ellipse 55% 40% at 88% 80%,
-                  rgba(58, 126, 52, 0.14),
-                  transparent 90%
+                  ellipse 70% 55% at 85% 80%,
+                  rgba(40, 140, 60, 0.24),
+                  transparent 72%
           ),
-          #0b120b;
+          #132413;
 
   background-attachment: fixed;
 }
@@ -73,7 +73,7 @@ form {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  background: #204e20;
+  background: #124012;
   padding: 20px 0px 20px 0px;
 }
 
@@ -84,12 +84,21 @@ label {
 }
 
 input {
+  border: 2px solid white;
   border-radius: var(--rounded-edge);
   width: min(900px, calc(100% - 32px));
   background: #08060d;
+  color: white;
   padding: 8px;
   margin: 0 auto;
   text-align: center;
+
+  transition: border-color 0.2s ease;
+}
+
+input:focus {
+  border-color: var(--green);
+  outline: none;
 }
 
 input[type="checkbox"]{
@@ -155,8 +164,10 @@ button:hover {
 }
 
 button:disabled {
+  border: none;
   cursor: not-allowed;
   opacity: 0.5;
+  box-shadow: none;
 }
 
 button.selected {
@@ -166,7 +177,7 @@ button.selected {
 
 /* PRESET BUTTON LOGIC */
 .preset-buttons:hover {
-
+  border: var(--green-border);
 }
 
 /* SPOTIFY BUTTON LOGIC */

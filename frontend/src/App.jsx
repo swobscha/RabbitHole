@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import "./App.css";
+
+import spotifyIcon from "./assets/spotify-icon.png";
+<img src={spotifyIcon} alt="Spotify" />
+
 const LOCAL_API_BASE_URL = "http://localhost:8080";
 const PRODUCTION_API_BASE_URL = "https://spotify-bot-giik.onrender.com";
 
@@ -609,10 +613,13 @@ function App() {
 
                         className={spotifyConnected ? "spotify-connected-button" : "spotify-disconnected-button"}
                         onClick={connectSpotify}>
-                        <img src="/assets/spotify-icon.png" alt="" />
-                        Connect Spotify</button>
+                         <span className="spotify-button-text">
+                             {spotifyConnected ? "Connected" : "Connect Spotify"}
+                          </span>
+                    <img src={spotifyIcon} alt="Spotify" />
+                </button>
 
-                <button type="button" className="wide-button" onClick={checkSpotifyStatus}>Refresh Status</button>
+
             </section>
 
             <hr />
@@ -872,7 +879,7 @@ function App() {
 
             <hr />
 
-            <section>
+            <form>
                 <h2>Playlist History</h2>
                 <button type="button" onClick={fetchPlaylistHistory}>Refresh History</button>
                 <button type="button" onClick={clearPlaylistHistory}>Clear History</button>
@@ -894,7 +901,7 @@ function App() {
                         ))}
                     </ul>
                 )}
-            </section>
+            </form>
         </main>
     );
 }

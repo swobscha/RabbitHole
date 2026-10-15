@@ -77,6 +77,7 @@ button {
   margin: 4px 8px 4px 0;
   padding: 8px 12px;
   cursor: pointer;
+
 }
 
 button:disabled {
@@ -99,28 +100,62 @@ button.selected {
   width: min(900px, calc(100% - 32px));
   padding: 8px;
   margin: 0 auto;
+
 }
 
+
+/* SPOTIFY BUTTON LOGIC */
 .spotify-connected-button {
   width: min(900px, calc(100% - 32px));
   padding: 8px;
   margin: 0 auto;
   background: #38df38;
-}
-
-.spotify-disconnected-button:hover img,
-.spotify-connected-button:hover img {
-  transform: translateY(-3px);
-
+  display: grid;
+  place-items: center;
+  cursor: not-allowed;
 
 }
+
+
 
 .spotify-disconnected-button {
   width: min(900px, calc(100% - 32px));
   padding: 8px;
   margin: 0 auto;
   background: #7f1d1d;
+  display: grid;
+  place-items: center;
+
 }
+
+.spotify-button-text,
+.spotify-connected-button img,
+.spotify-disconnected-button img {
+  grid-area: 1 / 1;
+  transition: 0.2s ease;
+}
+.spotify-connected-button img,
+.spotify-disconnected-button img {
+  display: block;
+  width: 24px;
+  height: 24px;
+
+  opacity: 0;
+  transform: scale(0.5);
+}
+
+.spotify-disconnected-button:hover .spotify-button-text {
+  opacity: 0;
+  transform: scale(0.8);
+}
+
+.spotify-disconnected-button:hover img {
+  opacity: 1;
+  transform: scale(1);
+}
+
+
+
 
 ol,
 ul {

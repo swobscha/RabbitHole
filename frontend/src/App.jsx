@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+const LOCAL_API_BASE_URL = "http://localhost:8080";
+const PRODUCTION_API_BASE_URL = "https://spotify-bot-giik.onrender.com";
+
+const isLocalFrontend =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
+
+const API_BASE_URL =
+    import.meta.env.VITE_API_BASE_URL ||
+    (isLocalFrontend ? LOCAL_API_BASE_URL : PRODUCTION_API_BASE_URL);
 
 function apiUrl(path) {
     const cleanBaseUrl = API_BASE_URL.replace(/\/+$/, "");
@@ -23,6 +32,7 @@ function App() {
     const [advancedOpen, setAdvancedOpen] = useState(false);
 
     const [spotifyConnected, setSpotifyConnected] = useState(false);
+    const [uiStage, setUiStage] = useState(1);
 
     const [seedArtistOptions, setSeedArtistOptions] = useState([]);
     const [selectedSeedArtist, setSelectedSeedArtist] = useState(null);
@@ -98,7 +108,7 @@ function App() {
     }
 
     function backendOfflineMessage() {
-        return "Could not reach the backend. Make sure Spring Boot is running on http://localhost:8080.";
+        return `Could not reach the backend at ${API_BASE_URL}. Please try again in a moment.`;
     }
 
     async function readApiError(response, fallbackMessage) {
@@ -279,11 +289,12 @@ function App() {
         setPlaylist(null);
         setCreatedPlaylist(null);
         setLastGenerationRequest(null);
+        setUiStage(spotifyConnected ? 2 : 1);
     }
 
     async function checkSpotifyStatus() {
         try {
-            const response = await fetch("http://localhost:8080/api/spotify/status");
+            const response = await fetch(apiUrl("/api/spotify/status"));
 
             if (!response.ok) {
                 setSpotifyConnected(false);
@@ -299,7 +310,7 @@ function App() {
 
     async function fetchPlaylistHistory() {
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/history");
+            const response = await fetch(apiUrl("/api/playlists/history"));
 
             if (!response.ok) {
                 return;
@@ -314,7 +325,7 @@ function App() {
 
     async function clearPlaylistHistory() {
         try {
-            await fetch("http://localhost:8080/api/playlists/history", {
+            await fetch(apiUrl("/api/playlists/history"), {
                 method: "DELETE",
             });
 
@@ -341,9 +352,9 @@ function App() {
 
         try {
             const response = await fetch(
-                `http://localhost:8080/api/spotify/artists/search?query=${encodeURIComponent(
-                    seedArtist
-                )}`
+                apiUrl(
+                    `/api/spotify/artists/search?query=${encodeURIComponent(seedArtist)}`
+                )
             );
 
             if (!response.ok) {
@@ -352,9 +363,13 @@ function App() {
             }
 
             const data = await response.json();
-            setSeedArtistOptions(Array.isArray(data) ? data.slice(0, 5) : []);
+            const options = Array.isArray(data) ? data.slice(0, 5) : [];
 
-            if (!Array.isArray(data) || data.length === 0) {
+            setSeedArtistOptions(options);
+
+            if (options.length > 0) {
+                setUiStage(3);
+            } else {
                 setArtistSearchError("No matching Spotify artists found.");
             }
         } catch (err) {
@@ -365,11 +380,7 @@ function App() {
     }
 
     function connectSpotify() {
-        window.open(apiUrl("/api/spotify/login"), "_self");
-
-        setTimeout(checkSpotifyStatus, 2000);
-        setTimeout(checkSpotifyStatus, 5000);
-        setTimeout(checkSpotifyStatus, 8000);
+        window.location.href = apiUrl("/api/spotify/login");
     }
 
     useEffect(() => {
@@ -390,6 +401,15 @@ function App() {
             window.removeEventListener("focus", handleFocus);
         };
     }, []);
+
+    useEffect(() => {
+        if (!spotifyConnected) {
+            setUiStage(1);
+            return;
+        }
+
+        setUiStage((current) => (current === 1 ? 2 : current));
+    }, [spotifyConnected]);
 
     async function generatePlaylist(event) {
         event.preventDefault();
@@ -414,7 +434,7 @@ function App() {
         const requestBody = buildGenerationRequest();
 
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/generate", {
+            const response = await fetch(apiUrl("/api/playlists/generate"), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -469,7 +489,7 @@ function App() {
         };
 
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/generate", {
+            const response = await fetch(apiUrl("/api/playlists/generate"), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -532,7 +552,7 @@ function App() {
         };
 
         try {
-            const response = await fetch("http://localhost:8080/api/playlists/create", {
+            const response = await fetch(apiUrl("/api/playlists/create"), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -588,357 +608,484 @@ function App() {
         setReplaceError("");
     }
 
-    const artistPickerRowStyle = {
-        display: "flex",
-        flexDirection: "row",
-        flexWrap: "nowrap",
-        gap: "12px",
-        width: "100%",
-        maxWidth: "100%",
-        overflowX: "auto",
-        overflowY: "hidden",
-        padding: "12px 0",
-        alignItems: "stretch",
-    };
 
-    function artistCardStyle(artist) {
-        const selected = selectedSeedArtist?.id === artist.id;
-
-        return {
-            flex: "0 0 120px",
-            width: "120px",
-            minWidth: "120px",
-            maxWidth: "120px",
-            height: "190px",
-            boxSizing: "border-box",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            gap: "6px",
-            padding: "8px",
-            border: selected
-                ? "2px solid #1db954"
-                : "1px solid rgba(255,255,255,0.22)",
-            borderRadius: "14px",
-            background: selected
-                ? "rgba(29,185,84,0.18)"
-                : "rgba(255,255,255,0.06)",
-            color: "white",
-            cursor: "pointer",
-            textAlign: "center",
-            boxShadow: selected ? "0 0 0 2px rgba(29,185,84,0.25)" : "none",
-        };
+    function goBack() {
+        setUiStage((current) => Math.max(1, current - 1));
     }
 
-    const artistImageStyle = {
-        width: "82px",
-        height: "82px",
-        minWidth: "82px",
-        minHeight: "82px",
-        maxWidth: "82px",
-        maxHeight: "82px",
-        borderRadius: "999px",
-        objectFit: "cover",
-        display: "block",
-        flexShrink: 0,
-    };
+    function selectSeedArtist(artist) {
+        setSelectedSeedArtist(artist);
+        setArtistSearchError("");
+        setCreatedPlaylist(null);
+        setUiStage(4);
+    }
 
-    const artistPlaceholderStyle = {
-        ...artistImageStyle,
-        display: "grid",
-        placeItems: "center",
-        background: "rgba(255,255,255,0.12)",
-        fontSize: "28px",
-        fontWeight: 700,
-    };
+    function stageClass(stage) {
+        if (uiStage === stage) {
+            return "wizard-step active-step";
+        }
 
-    const artistNameStyle = {
-        width: "100%",
-        fontSize: "12px",
-        lineHeight: "1.1",
-        fontWeight: 700,
-        overflowWrap: "anywhere",
-    };
+        if (uiStage > stage) {
+            return "wizard-step completed-step";
+        }
 
-    const artistMetaStyle = {
-        width: "100%",
-        fontSize: "10px",
-        lineHeight: "1.1",
-        opacity: 0.78,
-        overflowWrap: "anywhere",
-    };
+        return "wizard-step";
+    }
 
     return (
-        <main className="page">
-            <section className="hero">
-                <h1>Spotify Bot Playlist Manager</h1>
-                <p>Create a weighted playlist using Last.fm discovery and Spotify output.</p>
-
-                <div className="spotify-status-card">
-                    <p>
-                        Spotify Status:{" "}
-                        <strong className={spotifyConnected ? "connected" : "not-connected"}>
-                            {spotifyConnected ? "Connected" : "Not Connected"}
-                        </strong>
+        <main className="page-shell">
+            <header className="app-header">
+                <div>
+                    <p className="eyebrow">DISCOVERY ENGINE</p>
+                    <h1>Spotify Bot</h1>
+                    <p className="header-copy">
+                        Build a playlist one decision at a time.
                     </p>
-
-                    <div className="spotify-buttons">
-                        <button type="button" onClick={connectSpotify}>
-                            Connect Spotify
-                        </button>
-
-                        <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={checkSpotifyStatus}
-                        >
-                            Refresh Status
-                        </button>
-                    </div>
                 </div>
-            </section>
 
-            <section className="panel">
-                <form onSubmit={generatePlaylist} className="form">
-                    <label>
-                        Seed Artist
-                        <input
-                            value={seedArtist}
-                            onChange={handleSeedArtistChange}
-                            placeholder="Daft Punk"
-                        />
-                    </label>
+                <div className="backend-badge">
+                    <span className="status-dot" />
+                    <span>{API_BASE_URL}</span>
+                </div>
+            </header>
 
-                    <div className="seed-artist-search">
-                        <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={searchSeedArtists}
-                            disabled={artistSearchLoading || !spotifyConnected}
-                        >
-                            {artistSearchLoading ? "Searching..." : "Find Matching Artists"}
-                        </button>
-
-                        {selectedSeedArtist && (
-                            <p className="selected-seed-artist">
-                                Selected seed artist: <strong>{selectedSeedArtist.name}</strong>
+            <div className="wizard">
+                <section className={stageClass(1)}>
+                    <div className="step-heading">
+                        <div>
+                            <span className="stage-kicker">STEP 01</span>
+                            <h2>Connect Spotify</h2>
+                            <p className="step-description">
+                                Start by connecting the Spotify account that will receive the playlist.
                             </p>
-                        )}
-
-                        {artistSearchError && <p className="error">{artistSearchError}</p>}
-                    </div>
-
-                    {seedArtistOptions.length > 0 && (
-                        <div style={artistPickerRowStyle}>
-                            {seedArtistOptions.slice(0, 5).map((artist) => (
-                                <div
-                                    key={artist.id}
-                                    role="button"
-                                    tabIndex={0}
-                                    style={artistCardStyle(artist)}
-                                    onClick={() => setSelectedSeedArtist(artist)}
-                                    onKeyDown={(event) => {
-                                        if (event.key === "Enter" || event.key === " ") {
-                                            event.preventDefault();
-                                            setSelectedSeedArtist(artist);
-                                        }
-                                    }}
-                                >
-                                    {artist.imageUrl ? (
-                                        <img
-                                            src={artist.imageUrl}
-                                            alt={artist.name}
-                                            style={artistImageStyle}
-                                        />
-                                    ) : (
-                                        <div style={artistPlaceholderStyle}>?</div>
-                                    )}
-
-                                    <strong style={artistNameStyle}>{artist.name}</strong>
-
-                                    <span style={artistMetaStyle}>
-                    {formatNumber(artist.followers)} followers
-                  </span>
-
-                                    <small style={artistMetaStyle}>
-                                        {artist.genres && artist.genres.length > 0
-                                            ? artist.genres.slice(0, 3).join(", ")
-                                            : "No genres listed"}
-                                    </small>
-                                </div>
-                            ))}
                         </div>
-                    )}
 
-                    <label>
-                        Playlist Name
-                        <input
-                            value={playlistName}
-                            onChange={(event) => setPlaylistName(event.target.value)}
-                            placeholder="Niche Discovery Test"
-                        />
-                    </label>
-
-                    <label>
-                        Playlist Size
-                        <input
-                            type="number"
-                            min="1"
-                            max="50"
-                            value={playlistSize}
-                            onChange={(event) => setPlaylistSize(event.target.value)}
-                        />
-                    </label>
-
-                    <div>
-                        <p>Presets</p>
-
-                        <div className="spotify-buttons">
-                            {presets.map((preset) => (
-                                <button
-                                    key={preset.name}
-                                    type="button"
-                                    className="secondary-button"
-                                    onClick={() => applyPreset(preset)}
-                                    title={preset.description}
-                                >
-                                    {preset.name}
-                                </button>
-                            ))}
-                        </div>
+                        {uiStage > 1 && <span className="step-complete">Connected</span>}
                     </div>
-
-                    <label className="checkbox-label">
-                        <input
-                            type="checkbox"
-                            checked={avoidUsedTracks}
-                            onChange={(event) => setAvoidUsedTracks(event.target.checked)}
-                        />
-                        Avoid songs already used in previous playlists
-                    </label>
 
                     <button
                         type="button"
-                        className="secondary-button"
-                        onClick={() => setAdvancedOpen((current) => !current)}
+                        className={`button spotify-button ${
+                            spotifyConnected ? "spotify-connected" : "spotify-disconnected"
+                        }`}
+                        onClick={() => {
+                            if (spotifyConnected) {
+                                setUiStage(2);
+                            } else {
+                                connectSpotify();
+                            }
+                        }}
                     >
-                        {advancedOpen ? "Hide Advanced Settings" : "Show Advanced Settings"}
+                        <span className="spotify-button-text">
+                            {spotifyConnected ? "Spotify Connected — Continue" : "Connect Spotify"}
+                        </span>
+
+                        <span className="spotify-hover-icon" aria-hidden="true">♪</span>
                     </button>
+                </section>
 
-                    {!advancedOpen && (
-                        <p className="helper-text">
-                            Advanced filters and sliders are hidden. Current settings:
-                            popularity {formatPopularityScale(popularityScale)}, similarity{" "}
-                            {formatSimilarityScale(similarityScale)}, randomness{" "}
-                            {formatSliderValue(randomness)}.
-                        </p>
-                    )}
+                {uiStage >= 2 && (
+                    <form className="wizard-form" onSubmit={generatePlaylist}>
+                        <section className={stageClass(2)}>
+                            <div className="step-heading">
+                                <div>
+                                    <span className="stage-kicker">STEP 02</span>
+                                    <h2>Find your seed artist</h2>
+                                    <p className="step-description">
+                                        Search Spotify so the generator knows exactly which artist you mean.
+                                    </p>
+                                </div>
 
-                    {advancedOpen && (
-                        <div className="advanced-settings">
-                            <label>
-                                Restricted Artists
+                                {uiStage > 2 && (
+                                    <span className="step-complete">
+                                        {seedArtist || "Artist entered"}
+                                    </span>
+                                )}
+                            </div>
+
+                            <div className="field">
+                                <label htmlFor="seedArtist">Seed Artist</label>
                                 <input
-                                    value={restrictedArtists}
-                                    onChange={(event) => setRestrictedArtists(event.target.value)}
-                                    placeholder="Artist One, Artist Two"
+                                    id="seedArtist"
+                                    value={seedArtist}
+                                    onChange={handleSeedArtistChange}
+                                    placeholder="Daft Punk"
                                 />
-                            </label>
+                            </div>
 
-                            <label>
-                                Preferred Artists
-                                <input
-                                    value={preferredArtists}
-                                    onChange={(event) => setPreferredArtists(event.target.value)}
-                                    placeholder="Justice, Kavinsky"
-                                />
-                            </label>
+                            <div className="stage-actions">
+                                {uiStage === 2 && (
+                                    <button
+                                        type="button"
+                                        className="button button-back"
+                                        onClick={goBack}
+                                    >
+                                        ← Back
+                                    </button>
+                                )}
 
-                            <label>
-                                Preferred Genres / Tags
-                                <input
-                                    value={preferredGenres}
-                                    onChange={(event) => setPreferredGenres(event.target.value)}
-                                    placeholder="electronic, dance, house"
-                                />
-                            </label>
+                                <button
+                                    type="button"
+                                    className="button button-primary search-button"
+                                    onClick={searchSeedArtists}
+                                    disabled={artistSearchLoading || !spotifyConnected}
+                                >
+                                    {artistSearchLoading ? "Searching..." : "Find Matching Artists"}
+                                </button>
+                            </div>
 
-                            <label>
-                                Randomness: {formatSliderValue(randomness)}
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="1"
-                                    step="0.1"
-                                    value={randomness}
-                                    onChange={(event) => setRandomness(event.target.value)}
-                                />
-                            </label>
+                            {artistSearchError && (
+                                <p className="error">{artistSearchError}</p>
+                            )}
+                        </section>
 
-                            <label>
-                                Popularity: {formatPopularityScale(popularityScale)}
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="1"
-                                    step="0.1"
-                                    value={popularityScale}
-                                    onChange={(event) => setPopularityScale(event.target.value)}
-                                />
-                                <span>High Streams &larr; Balanced &rarr; Low Streams</span>
-                            </label>
+                        {uiStage >= 3 && (
+                            <section className={stageClass(3)}>
+                                <div className="step-heading">
+                                    <div>
+                                        <span className="stage-kicker">STEP 03</span>
+                                        <h2>Choose the right artist</h2>
+                                        <p className="step-description">
+                                            Pick one of the five Spotify matches. The selected artist becomes the seed.
+                                        </p>
+                                    </div>
 
-                            <label>
-                                Similarity to Seed Artist: {formatSimilarityScale(similarityScale)}
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="1"
-                                    step="0.1"
-                                    value={similarityScale}
-                                    onChange={(event) => setSimilarityScale(event.target.value)}
-                                />
-                                <span>Farther &larr; Balanced &rarr; Closer</span>
-                            </label>
-                        </div>
-                    )}
+                                    {uiStage > 3 && selectedSeedArtist && (
+                                        <span className="step-complete">
+                                            {selectedSeedArtist.name}
+                                        </span>
+                                    )}
+                                </div>
 
-                    <button
-                        type="submit"
-                        disabled={loading || !spotifyConnected || !selectedSeedArtist}
-                    >
-                        {loading ? "Generating..." : "Generate Playlist"}
-                    </button>
+                                <div className="artist-options">
+                                    {seedArtistOptions.slice(0, 5).map((artist) => (
+                                        <button
+                                            key={artist.id}
+                                            type="button"
+                                            className={`artist-option ${
+                                                selectedSeedArtist?.id === artist.id ? "selected" : ""
+                                            }`}
+                                            onClick={() => selectSeedArtist(artist)}
+                                        >
+                                            {artist.imageUrl ? (
+                                                <img
+                                                    className="artist-image"
+                                                    src={artist.imageUrl}
+                                                    alt=""
+                                                />
+                                            ) : (
+                                                <span className="artist-placeholder" aria-hidden="true">
+                                                    {artist.name?.charAt(0)?.toUpperCase() || "?"}
+                                                </span>
+                                            )}
 
-                    {!selectedSeedArtist && (
-                        <p className="helper-text">
-                            Search and select the correct Spotify seed artist before generating.
-                        </p>
-                    )}
+                                            <span className="artist-name">{artist.name}</span>
+                                            <span className="artist-meta">
+                                                {formatNumber(artist.followers)} followers
+                                            </span>
 
-                    {error && <p className="error">{error}</p>}
-                </form>
-            </section>
+                                            {artist.genres?.length > 0 && (
+                                                <span className="artist-genres">
+                                                    {artist.genres.slice(0, 2).join(" · ")}
+                                                </span>
+                                            )}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {uiStage === 3 && (
+                                    <div className="stage-actions">
+                                        <button
+                                            type="button"
+                                            className="button button-back"
+                                            onClick={goBack}
+                                        >
+                                            ← Back
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            className="button button-secondary"
+                                            onClick={searchSeedArtists}
+                                            disabled={artistSearchLoading}
+                                        >
+                                            {artistSearchLoading ? "Searching..." : "Search Again"}
+                                        </button>
+                                    </div>
+                                )}
+                            </section>
+                        )}
+
+                        {uiStage >= 4 && (
+                            <section className={stageClass(4)}>
+                                <div className="step-heading">
+                                    <div>
+                                        <span className="stage-kicker">STEP 04</span>
+                                        <h2>Name and size</h2>
+                                        <p className="step-description">
+                                            Give the playlist a name and choose how many songs you want.
+                                        </p>
+                                    </div>
+
+                                    {uiStage > 4 && (
+                                        <span className="step-complete">
+                                            {playlistSize} tracks
+                                        </span>
+                                    )}
+                                </div>
+
+                                {selectedSeedArtist && (
+                                    <div className="selected-artist-summary">
+                                        {selectedSeedArtist.imageUrl ? (
+                                            <img
+                                                src={selectedSeedArtist.imageUrl}
+                                                alt=""
+                                            />
+                                        ) : (
+                                            <span className="summary-placeholder">
+                                                {selectedSeedArtist.name?.charAt(0)?.toUpperCase() || "?"}
+                                            </span>
+                                        )}
+
+                                        <div>
+                                            <small>Seed artist</small>
+                                            <strong>{selectedSeedArtist.name}</strong>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="field">
+                                    <label htmlFor="playlistName">Playlist Name</label>
+                                    <input
+                                        id="playlistName"
+                                        value={playlistName}
+                                        onChange={(event) => setPlaylistName(event.target.value)}
+                                        placeholder="Late Night Discovery"
+                                    />
+                                </div>
+
+                                <div className="field">
+                                    <label htmlFor="playlistSize" className="range-label">
+                                        <span>Playlist Size</span>
+                                        <span className="range-value">{playlistSize}</span>
+                                    </label>
+
+                                    <input
+                                        id="playlistSize"
+                                        type="range"
+                                        min="1"
+                                        max="50"
+                                        step="1"
+                                        value={playlistSize}
+                                        onChange={(event) => setPlaylistSize(event.target.value)}
+                                    />
+
+                                    <div className="range-ends">
+                                        <span>1</span>
+                                        <span>50</span>
+                                    </div>
+                                </div>
+
+                                {uiStage === 4 && (
+                                    <div className="stage-actions">
+                                        <button
+                                            type="button"
+                                            className="button button-back"
+                                            onClick={goBack}
+                                        >
+                                            ← Back
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            className="button button-primary"
+                                            onClick={() => setUiStage(5)}
+                                            disabled={!playlistName.trim() || !selectedSeedArtist}
+                                        >
+                                            Continue →
+                                        </button>
+                                    </div>
+                                )}
+                            </section>
+                        )}
+
+                        {uiStage >= 5 && (
+                            <section className={stageClass(5)}>
+                                <div className="step-heading">
+                                    <div>
+                                        <span className="stage-kicker">STEP 05</span>
+                                        <h2>Shape the discovery</h2>
+                                        <p className="step-description">
+                                            Pick a preset, optionally fine-tune it, then generate.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="preset-grid">
+                                    {presets.map((preset) => (
+                                        <button
+                                            key={preset.name}
+                                            type="button"
+                                            className="preset-button"
+                                            onClick={() => applyPreset(preset)}
+                                            title={preset.description}
+                                        >
+                                            <strong>{preset.name}</strong>
+                                            <span>{preset.description}</span>
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <label className="checkbox-row">
+                                    <input
+                                        type="checkbox"
+                                        checked={avoidUsedTracks}
+                                        onChange={(event) => setAvoidUsedTracks(event.target.checked)}
+                                    />
+                                    <span>Avoid songs already used</span>
+                                </label>
+
+                                <button
+                                    type="button"
+                                    className="button button-secondary advanced-toggle"
+                                    onClick={() => setAdvancedOpen((current) => !current)}
+                                >
+                                    {advancedOpen ? "Hide Advanced Settings" : "Show Advanced Settings"}
+                                </button>
+
+                                {advancedOpen && (
+                                    <div className="advanced-settings">
+                                        <div className="field">
+                                            <label htmlFor="restrictedArtists">Restricted Artists</label>
+                                            <input
+                                                id="restrictedArtists"
+                                                value={restrictedArtists}
+                                                onChange={(event) => setRestrictedArtists(event.target.value)}
+                                                placeholder="Artist One, Artist Two"
+                                            />
+                                        </div>
+
+                                        <div className="field">
+                                            <label htmlFor="preferredArtists">Preferred Artists</label>
+                                            <input
+                                                id="preferredArtists"
+                                                value={preferredArtists}
+                                                onChange={(event) => setPreferredArtists(event.target.value)}
+                                                placeholder="Justice, Kavinsky"
+                                            />
+                                        </div>
+
+                                        <div className="field">
+                                            <label htmlFor="preferredGenres">Preferred Genres / Tags</label>
+                                            <input
+                                                id="preferredGenres"
+                                                value={preferredGenres}
+                                                onChange={(event) => setPreferredGenres(event.target.value)}
+                                                placeholder="electronic, dance, house"
+                                            />
+                                        </div>
+
+                                        <div className="field slider-field">
+                                            <label htmlFor="randomness">
+                                                Randomness
+                                                <span>{formatSliderValue(randomness)}</span>
+                                            </label>
+                                            <input
+                                                id="randomness"
+                                                type="range"
+                                                min="0"
+                                                max="1"
+                                                step="0.1"
+                                                value={randomness}
+                                                onChange={(event) => setRandomness(event.target.value)}
+                                            />
+                                        </div>
+
+                                        <div className="field slider-field">
+                                            <label htmlFor="popularity">
+                                                Popularity / Obscurity
+                                                <span>{formatPopularityScale(popularityScale)}</span>
+                                            </label>
+                                            <input
+                                                id="popularity"
+                                                type="range"
+                                                min="0"
+                                                max="1"
+                                                step="0.1"
+                                                value={popularityScale}
+                                                onChange={(event) => setPopularityScale(event.target.value)}
+                                            />
+                                        </div>
+
+                                        <div className="field slider-field">
+                                            <label htmlFor="similarity">
+                                                Similarity to Seed
+                                                <span>{formatSimilarityScale(similarityScale)}</span>
+                                            </label>
+                                            <input
+                                                id="similarity"
+                                                type="range"
+                                                min="0"
+                                                max="1"
+                                                step="0.1"
+                                                value={similarityScale}
+                                                onChange={(event) => setSimilarityScale(event.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="stage-actions final-actions">
+                                    <button
+                                        type="button"
+                                        className="button button-back"
+                                        onClick={goBack}
+                                    >
+                                        ← Back
+                                    </button>
+
+                                    <button
+                                        type="submit"
+                                        className="button button-primary generate-button"
+                                        disabled={loading || !spotifyConnected || !selectedSeedArtist}
+                                    >
+                                        {loading ? "Generating..." : "Generate Playlist"}
+                                    </button>
+                                </div>
+
+                                {error && <p className="error">{error}</p>}
+                            </section>
+                        )}
+                    </form>
+                )}
+            </div>
 
             {playlist && (
-                <section className="playlist">
-                    <div className="playlist-title-row">
+                <section className="results-panel" id="playlist-results">
+                    <div className="results-header">
                         <div>
+                            <p className="eyebrow">GENERATED PLAYLIST</p>
                             <h2>{playlist.playlistName}</h2>
-                            <p>Seed artist: {playlist.seedArtist}</p>
-                            <p>Tracks selected: {playlist.tracks.length}</p>
+                            <p>
+                                {playlist.tracks.length} tracks · Seeded by {playlist.seedArtist}
+                            </p>
                         </div>
 
-                        <div className="playlist-actions">
+                        <div className="results-actions">
                             <button
+                                type="button"
+                                className="button button-primary"
                                 onClick={createPlaylist}
                                 disabled={creating || playlist.tracks.length === 0 || !spotifyConnected}
                             >
-                                {creating ? "Creating..." : "Create Playlist"}
+                                {creating ? "Creating..." : "Create on Spotify"}
                             </button>
 
-                            <button className="secondary-button" onClick={clearPlaylist}>
+                            <button
+                                type="button"
+                                className="button button-secondary"
+                                onClick={clearPlaylist}
+                            >
                                 Clear
                             </button>
                         </div>
@@ -947,161 +1094,168 @@ function App() {
                     {createError && <p className="error">{createError}</p>}
                     {replaceError && <p className="error">{replaceError}</p>}
 
-                    {playlist.tracks.length === 0 && (
-                        <p className="error">
-                            No tracks selected. Generate again or adjust your filters.
-                        </p>
-                    )}
-
                     {createdPlaylist && (
-                        <div className="success-card">
-                            <h3>{createdPlaylist.status}</h3>
-                            <p>Playlist: {createdPlaylist.playlistName}</p>
-                            <p>Tracks added: {createdPlaylist.trackCount}</p>
+                        <div className="success">
+                            <strong>{createdPlaylist.status}</strong>
+                            <span>{createdPlaylist.playlistName}</span>
+                            <span>{createdPlaylist.trackCount} tracks added</span>
                             <a
                                 href={createdPlaylist.spotifyPlaylistUrl}
                                 target="_blank"
                                 rel="noreferrer"
                             >
-                                Open Spotify Playlist
+                                Open Spotify Playlist ↗
                             </a>
                         </div>
                     )}
 
-                    <div className="track-list">
+                    <ol className="track-list">
                         {playlist.tracks.map((item, index) => {
                             const spotifyUrl = spotifyTrackUrl(item.track);
 
                             return (
-                                <div
-                                    className="track-card"
+                                <li
                                     key={`${item.track.spotifyUri || item.track.id || item.track.name}-${index}`}
+                                    className="track-card"
                                 >
-                                    <div className="track-header">
-                                        <span className="rank">#{index + 1}</span>
+                                    <div className="track-topline">
+                                        <span className="track-number">
+                                            {String(index + 1).padStart(2, "0")}
+                                        </span>
 
-                                        <div>
+                                        <div className="track-title">
                                             <h3>{item.track.name}</h3>
                                             <p>{item.track.artistName}</p>
                                         </div>
+
+                                        <span className="score-chip">
+                                            {Number(item.score).toFixed(1)}
+                                        </span>
                                     </div>
 
-                                    <p className="score">Score: {Number(item.score).toFixed(2)}</p>
-
-                                    {spotifyUrl && (
-                                        <p>
-                                            <a href={spotifyUrl} target="_blank" rel="noreferrer">
-                                                Open in Spotify
-                                            </a>
-                                        </p>
+                                    {(item.track.genres || []).length > 0 && (
+                                        <div className="genre-row">
+                                            {item.track.genres.slice(0, 5).map((genre) => (
+                                                <span key={genre}>{genre}</span>
+                                            ))}
+                                        </div>
                                     )}
 
-                                    <div className="genres">
-                                        {(item.track.genres || []).map((genre) => (
-                                            <span key={genre}>{genre}</span>
-                                        ))}
-                                    </div>
+                                    <details>
+                                        <summary>Why this track?</summary>
+                                        <div className="track-details">
+                                            <p>Track plays: {formatNumber(item.track.trackPlaycount)}</p>
+                                            <p>Track listeners: {formatNumber(item.track.trackListeners)}</p>
+                                            <p>Artist plays: {formatNumber(item.track.artistPlaycount)}</p>
+                                            <p>Artist listeners: {formatNumber(item.track.artistListeners)}</p>
+                                            <p>Artist similarity: {formatSimilarity(item.track.artistSimilarity)}</p>
 
-                                    <div className="metadata">
-                                        <p>
-                                            <strong>Track plays:</strong>{" "}
-                                            {formatNumber(item.track.trackPlaycount)}
-                                        </p>
+                                            {(item.reasons || []).length > 0 && (
+                                                <ul>
+                                                    {item.reasons.map((reason) => (
+                                                        <li key={reason}>{reason}</li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+                                    </details>
 
-                                        <p>
-                                            <strong>Track listeners:</strong>{" "}
-                                            {formatNumber(item.track.trackListeners)}
-                                        </p>
+                                    <div className="track-actions">
+                                        {spotifyUrl && (
+                                            <a
+                                                className="text-link"
+                                                href={spotifyUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                            >
+                                                Open in Spotify ↗
+                                            </a>
+                                        )}
 
-                                        <p>
-                                            <strong>Artist plays:</strong>{" "}
-                                            {formatNumber(item.track.artistPlaycount)}
-                                        </p>
-
-                                        <p>
-                                            <strong>Artist listeners:</strong>{" "}
-                                            {formatNumber(item.track.artistListeners)}
-                                        </p>
-
-                                        <p>
-                                            <strong>Artist similarity:</strong>{" "}
-                                            {formatSimilarity(item.track.artistSimilarity)}
-                                        </p>
-
-                                        <p>
-                                            <strong>Spotify URI:</strong>{" "}
-                                            {item.track.spotifyUri ? "Validated" : "Missing"}
-                                        </p>
-                                    </div>
-
-                                    <ul>
-                                        {(item.reasons || []).map((reason) => (
-                                            <li key={reason}>{reason}</li>
-                                        ))}
-                                    </ul>
-
-                                    <div className="spotify-buttons">
                                         <button
                                             type="button"
-                                            className="secondary-button"
+                                            className="button button-secondary small-button"
                                             onClick={() => replaceTrack(index)}
                                             disabled={replacingTrackIndex !== null}
                                         >
-                                            {replacingTrackIndex === index ? "Replacing..." : "Replace Track"}
+                                            {replacingTrackIndex === index ? "Replacing..." : "Replace"}
                                         </button>
 
                                         <button
-                                            className="remove-button"
+                                            type="button"
+                                            className="button button-danger small-button"
                                             onClick={() =>
-                                                removeTrack(item.track.id, item.track.spotifyUri, index)
+                                                removeTrack(
+                                                    item.track.id,
+                                                    item.track.spotifyUri,
+                                                    index
+                                                )
                                             }
                                         >
-                                            Remove Track
+                                            Remove
                                         </button>
                                     </div>
-                                </div>
+                                </li>
                             );
                         })}
-                    </div>
+                    </ol>
                 </section>
             )}
 
-            <section className="playlist history-section">
-                <div className="playlist-title-row">
+            <section className="history-panel">
+                <div className="results-header">
                     <div>
+                        <p className="eyebrow">HISTORY</p>
                         <h2>Playlist History</h2>
-                        <p>Recently created Spotify playlists from this session.</p>
                     </div>
 
-                    <div className="playlist-actions">
-                        <button className="secondary-button" onClick={fetchPlaylistHistory}>
-                            Refresh History
+                    <div className="results-actions">
+                        <button
+                            type="button"
+                            className="button button-secondary small-button"
+                            onClick={fetchPlaylistHistory}
+                        >
+                            Refresh
                         </button>
 
-                        <button className="remove-button" onClick={clearPlaylistHistory}>
+                        <button
+                            type="button"
+                            className="button button-danger small-button"
+                            onClick={clearPlaylistHistory}
+                        >
                             Clear History
                         </button>
                     </div>
                 </div>
 
-                {playlistHistory.length === 0 && (
-                    <p className="empty-history">No playlists created yet.</p>
+                {playlistHistory.length === 0 ? (
+                    <p className="empty-state">No playlists created yet.</p>
+                ) : (
+                    <ul className="history-list">
+                        {playlistHistory.map((item) => (
+                            <li key={item.id}>
+                                <div>
+                                    <strong>{item.playlistName}</strong>
+                                    <span>
+                                        {item.trackCount} tracks · {item.seedArtist || "Unknown seed"}
+                                    </span>
+                                </div>
+
+                                <div>
+                                    <span>{new Date(item.createdAt).toLocaleString()}</span>
+                                    <a
+                                        className="text-link"
+                                        href={item.spotifyPlaylistUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                    >
+                                        Open ↗
+                                    </a>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
                 )}
-
-                <div className="history-list">
-                    {playlistHistory.map((item) => (
-                        <div className="history-card" key={item.id}>
-                            <h3>{item.playlistName}</h3>
-                            <p>Seed artist: {item.seedArtist || "Unknown"}</p>
-                            <p>Tracks added: {item.trackCount}</p>
-                            <p>Created: {new Date(item.createdAt).toLocaleString()}</p>
-
-                            <a href={item.spotifyPlaylistUrl} target="_blank" rel="noreferrer">
-                                Open in Spotify
-                            </a>
-                        </div>
-                    ))}
-                </div>
             </section>
         </main>
     );

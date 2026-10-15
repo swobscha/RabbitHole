@@ -683,11 +683,17 @@ function App() {
                         value={playlistSize}
                         onChange={(event) => setPlaylistSize(event.target.value)}
                     />
-
+                    <input
+                        type="range"
+                        min="1"
+                        max="50"
+                        value={playlistSize}
+                        onChange={(e) => setPlaylistSize(e.target.value)}
+                        />
                     <p>Presets</p>
                     <div>
                         {presets.map((preset) => (
-                            <button
+                            <button className="preset-buttons"
                                 key={preset.name}
                                 type="button"
                                 onClick={() => applyPreset(preset)}

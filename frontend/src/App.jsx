@@ -92,12 +92,7 @@ function App() {
     const [advancedOpen, setAdvancedOpen] = useState(false);
 
     const [spotifyConnected, setSpotifyConnected] = useState(false);
-<<<<<<< HEAD
-=======
     const [loginError, setLoginError] = useState(initialLoginError);
-    const [wizardStage, setUiStage] = useState(2);
-    const uiStage = spotifyConnected ? wizardStage : 1;
->>>>>>> 0dd369d (bug fixes, backend improvements, database inconsistencies)
 
     const [seedArtistOptions, setSeedArtistOptions] = useState([]);
     const [selectedSeedArtist, setSelectedSeedArtist] = useState(null);
@@ -480,7 +475,6 @@ function App() {
         setSelectedSeedArtist(null);
         setSeedArtistOptions([]);
         setLastGenerationRequest(null);
-        setUiStage(2);
     }
 
     useEffect(() => {
@@ -708,6 +702,12 @@ function App() {
                     <img src={spotifyIcon} alt="Spotify" />
                 </button>
 
+                {spotifyConnected && (
+                    <button type="button" onClick={disconnectSpotify}>Disconnect</button>
+                )}
+
+                {loginError && <p className="error">{loginError}</p>}
+
 
             </section>
 
@@ -733,28 +733,11 @@ function App() {
                     >
                         {artistSearchLoading ? "Searching..." : "Find Matching Artists"}
                     </button>
-<<<<<<< HEAD
-=======
-
-                    {spotifyConnected && (
-                        <button
-                            type="button"
-                            className="button button-secondary small-button disconnect-button"
-                            onClick={disconnectSpotify}
-                        >
-                            Disconnect
-                        </button>
-                    )}
-
-                    {loginError && <p className="error">{loginError}</p>}
-                </section>
->>>>>>> 0dd369d (bug fixes, backend improvements, database inconsistencies)
 
                     {artistSearchError && <p className="error">{artistSearchError}</p>}
 
                     {seedArtistOptions.length > 0 && (
                         <div>
-<<<<<<< HEAD
                             <p>Select the correct Spotify artist:</p>
                             {seedArtistOptions.map((artist) => (
                                 <button
@@ -766,51 +749,6 @@ function App() {
                                     {artist.name} — {formatNumber(artist.followers)} followers
                                 </button>
                             ))}
-=======
-                            <p className="eyebrow">GENERATED PLAYLIST</p>
-                            <h2>{playlist.playlistName}</h2>
-                            <p>
-                                {playlist.tracks.length} tracks · Seeded by {playlist.seedArtist}
-                            </p>
-                        </div>
-
-                        <div className="results-actions">
-                            <button
-                                type="button"
-                                className="button button-primary"
-                                onClick={createPlaylist}
-                                disabled={creating || playlist.tracks.length === 0 || !spotifyConnected}
-                            >
-                                {creating ? "Creating..." : "Create on Spotify"}
-                            </button>
-
-                            <button
-                                type="button"
-                                className="button button-secondary"
-                                onClick={clearPlaylist}
-                            >
-                                Clear
-                            </button>
-                        </div>
-                    </div>
-
-                    {generationNotice && <p className="notice">{generationNotice}</p>}
-                    {createError && <p className="error">{createError}</p>}
-                    {replaceError && <p className="error">{replaceError}</p>}
-
-                    {createdPlaylist && (
-                        <div className="success">
-                            <strong>{createdPlaylist.status}</strong>
-                            <span>{createdPlaylist.playlistName}</span>
-                            <span>{createdPlaylist.trackCount} tracks added</span>
-                            <a
-                                href={createdPlaylist.spotifyPlaylistUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                            >
-                                Open Spotify Playlist ↗
-                            </a>
->>>>>>> 0dd369d (bug fixes, backend improvements, database inconsistencies)
                         </div>
                     )}
 
@@ -964,6 +902,7 @@ function App() {
 
                         <button type="button" onClick={clearPlaylist}>Clear Playlist</button>
 
+                        {generationNotice && <p className="notice">{generationNotice}</p>}
                         {createError && <p className="error">{createError}</p>}
                         {replaceError && <p className="error">{replaceError}</p>}
 
@@ -1036,46 +975,18 @@ function App() {
 
             <hr />
 
-<<<<<<< HEAD
             <form>
                 <h2>Playlist History</h2>
                 <button type="button" onClick={fetchPlaylistHistory}>Refresh History</button>
-                <button type="button" onClick={clearPlaylistHistory}>Clear History</button>
-
-                {playlistHistory.length === 0 ? (
-                    <p>No playlists created yet.</p>
-                ) : (
-                    <ul>
-                        {playlistHistory.map((item) => (
-=======
-                    <div className="results-actions">
-                        <button
-                            type="button"
-                            className="button button-secondary small-button"
-                            onClick={fetchPlaylistHistory}
-                        >
-                            Refresh
-                        </button>
-
-                        <button
-                            type="button"
-                            className="button button-danger small-button"
-                            onClick={clearPlaylistHistory}
-                            disabled={!spotifyConnected}
-                        >
-                            Clear History
-                        </button>
-                    </div>
-                </div>
+                <button type="button" onClick={clearPlaylistHistory} disabled={!spotifyConnected}>Clear History</button>
 
                 {historyError && <p className="error">{historyError}</p>}
 
                 {visibleHistory.length === 0 ? (
-                    <p className="empty-state">No playlists created yet.</p>
+                    <p>No playlists created yet.</p>
                 ) : (
-                    <ul className="history-list">
+                    <ul>
                         {visibleHistory.map((item) => (
->>>>>>> 0dd369d (bug fixes, backend improvements, database inconsistencies)
                             <li key={item.id}>
                                 <strong>{item.playlistName}</strong>
                                 <p>Seed artist: {item.seedArtist || "Unknown"}</p>

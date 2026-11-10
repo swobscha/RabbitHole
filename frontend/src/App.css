@@ -734,6 +734,19 @@ input[type="range"]:hover::-moz-range-thumb {
   background: rgba(127, 29, 29, 0.3);
 }
 
+.notice {
+  margin: 12px 0 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 12px;
+  color: #fde9a8;
+  background: rgba(113, 83, 8, 0.3);
+}
+
+.disconnect-button {
+  margin-top: 10px;
+}
+
 .results-panel,
 .history-panel {
   margin-top: 22px;

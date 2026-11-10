@@ -8,6 +8,7 @@ import reactor.core.publisher.Mono;
 import spotifybot.model.PlaylistGenerationRequest;
 import spotifybot.model.PlaylistGenerationResult;
 import spotifybot.model.PlaylistReplaceTrackRequest;
+import spotifybot.model.SpotifySession;
 import spotifybot.model.TrackCandidate;
 import spotifybot.model.WeightedTrack;
 import spotifybot.provider.MusicApiProvider;
@@ -28,7 +29,8 @@ public class PlaylistGenerationService {
 
     private static final int DISCOVERY_BATCH_SIZE = 100;
     private static final int MAX_DISCOVERY_ROUNDS = 20;
-    private static final int MAX_SPOTIFY_LOOKUP_ATTEMPTS = 60;
+    private static final int MIN_SPOTIFY_LOOKUP_ATTEMPTS = 60;
+    private static final int SPOTIFY_LOOKUP_ATTEMPTS_PER_TRACK = 3;
 
     private static final int MIN_PLAYLIST_SIZE = 1;
     private static final int MAX_PLAYLIST_SIZE = 50;
@@ -64,36 +66,39 @@ public class PlaylistGenerationService {
         this.rankingDebugService = rankingDebugService;
     }
 
-    public Mono<PlaylistGenerationResult> generatePlaylist(PlaylistGenerationRequest request) {
+    public Mono<PlaylistGenerationResult> generatePlaylist(
+            SpotifySession session,
+            PlaylistGenerationRequest request
+    ) {
         validateGenerationRequest(request);
 
         int playlistSize = request.playlistSize();
+        int lookupAttempts = lookupAttemptsFor(playlistSize);
 
         System.out.println(
                 "GENERATION START"
                         + " | playlistName=" + request.playlistName()
                         + " | seedArtist=" + request.seedArtist()
                         + " | requestedSize=" + playlistSize
-                        + " | maxSpotifyLookupAttempts=" + MAX_SPOTIFY_LOOKUP_ATTEMPTS
+                        + " | maxSpotifyLookupAttempts=" + lookupAttempts
                         + " | popularityScale=" + request.nicheSongScale()
                         + " | similarityScale=" + request.safeSimilarityScale()
                         + " | avoidUsedTracks=" + request.avoidUsedTracks()
         );
 
-        return spotifyAuthService.getValidAccessToken()
+        return spotifyAuthService.getValidAccessToken(session)
                 .flatMap(accessToken ->
-                        loadUsedTrackKeys(request)
+                        loadUsedTrackKeys(session, request)
                                 .flatMap(usedTrackKeys -> {
                                     ValidationState state = new ValidationState(
                                             playlistSize,
                                             maxTracksPerArtist(request, playlistSize),
-                                            MAX_SPOTIFY_LOOKUP_ATTEMPTS
+                                            lookupAttempts
                                     );
 
                                     return generateWithExpansion(
                                             request,
                                             usedTrackKeys,
-                                            playlistSize,
                                             accessToken,
                                             1,
                                             state
@@ -109,28 +114,16 @@ public class PlaylistGenerationService {
                 );
     }
 
-    public Mono<WeightedTrack> replaceTrack(PlaylistReplaceTrackRequest request) {
+    public Mono<WeightedTrack> replaceTrack(SpotifySession session, PlaylistReplaceTrackRequest request) {
         validateReplaceTrackRequest(request);
 
         PlaylistGenerationRequest original = request.generationRequest();
-
-        Set<String> blockedTrackKeys = request.safeCurrentTracks()
-                .stream()
-                .map(this::trackKey)
-                .filter(key -> !key.isBlank())
-                .collect(Collectors.toSet());
-
-        Set<String> blockedSpotifyUris = request.safeCurrentTracks()
-                .stream()
-                .map(this::spotifyUri)
-                .filter(uri -> !uri.isBlank())
-                .collect(Collectors.toSet());
 
         PlaylistGenerationRequest replacementRequest = new PlaylistGenerationRequest(
                 original.seedArtist(),
                 original.seedSpotifyArtistId(),
                 original.playlistName(),
-                request.safeReplacementSearchSize(),
+                original.playlistSize(),
                 original.restrictedArtists(),
                 original.preferredArtists(),
                 original.preferredGenres(),
@@ -147,19 +140,29 @@ public class PlaylistGenerationService {
                 "REPLACE TRACK START"
                         + " | seedArtist=" + original.seedArtist()
                         + " | currentTracks=" + request.safeCurrentTracks().size()
-                        + " | replacementSearchSize=" + request.safeReplacementSearchSize()
         );
 
-        return generatePlaylist(replacementRequest)
+        ValidationState state = new ValidationState(
+                1,
+                maxTracksPerArtist(original, original.playlistSize()),
+                lookupAttemptsFor(original.playlistSize())
+        );
+
+        blockCurrentTracks(state, request);
+
+        return spotifyAuthService.getValidAccessToken(session)
+                .flatMap(accessToken ->
+                        loadUsedTrackKeys(session, replacementRequest)
+                                .flatMap(usedTrackKeys -> generateWithExpansion(
+                                        replacementRequest,
+                                        usedTrackKeys,
+                                        accessToken,
+                                        1,
+                                        state
+                                ))
+                )
                 .map(result -> result.tracks()
                         .stream()
-                        .filter(candidate -> {
-                            String key = trackKey(candidate);
-                            String uri = spotifyUri(candidate);
-
-                            return !blockedTrackKeys.contains(key)
-                                    && !blockedSpotifyUris.contains(uri);
-                        })
                         .findFirst()
                         .orElseThrow(() -> new ResponseStatusException(
                                 HttpStatus.NOT_FOUND,
@@ -174,15 +177,40 @@ public class PlaylistGenerationService {
                 ));
     }
 
+    private int lookupAttemptsFor(int playlistSize) {
+        return Math.max(MIN_SPOTIFY_LOOKUP_ATTEMPTS, playlistSize * SPOTIFY_LOOKUP_ATTEMPTS_PER_TRACK);
+    }
+
+    private void blockCurrentTracks(ValidationState state, PlaylistReplaceTrackRequest request) {
+        String replacedKey = trackKey(request.trackToReplace());
+
+        state.attemptedKeys.add(replacedKey);
+
+        for (WeightedTrack current : request.safeCurrentTracks()) {
+            String key = trackKey(current);
+            String uri = spotifyUri(current);
+
+            state.attemptedKeys.add(key);
+
+            if (!uri.isBlank()) {
+                state.seenSpotifyUris.add(uri);
+            }
+
+            if (!key.equals(replacedKey) && current != null && current.track() != null) {
+                state.artistCounts.merge(normalizeArtistName(current.track().artistName()), 1, Integer::sum);
+            }
+        }
+    }
+
     private Mono<PlaylistGenerationResult> generateWithExpansion(
             PlaylistGenerationRequest originalRequest,
             Set<String> usedTrackKeys,
-            int playlistSize,
             String accessToken,
             int round,
             ValidationState state
     ) {
         int discoveryLimit = DISCOVERY_BATCH_SIZE * round;
+        int attemptsBeforeRound = state.spotifyAttemptsMade();
 
         PlaylistGenerationRequest expandedRequest = withDiscoveryLimit(
                 originalRequest,
@@ -191,17 +219,21 @@ public class PlaylistGenerationService {
 
         return generateSingleRound(expandedRequest, usedTrackKeys, accessToken, round, state)
                 .flatMap(result -> {
-                    boolean playlistIsFull = result.tracks().size() >= playlistSize;
+                    boolean playlistIsFull = result.tracks().size() >= state.targetSize;
                     boolean reachedMaxRounds = round >= MAX_DISCOVERY_ROUNDS;
                     boolean attemptsExhausted = state.attemptsRemaining <= 0;
+                    boolean noNewCandidates = !state.candidatePoolGrew
+                            && state.spotifyAttemptsMade() == attemptsBeforeRound;
 
-                    if (playlistIsFull || reachedMaxRounds || attemptsExhausted) {
+                    if (playlistIsFull || reachedMaxRounds || attemptsExhausted || noNewCandidates) {
                         String stopReason;
 
                         if (playlistIsFull) {
                             stopReason = "playlist full";
                         } else if (attemptsExhausted) {
                             stopReason = "Spotify lookup attempts exhausted";
+                        } else if (noNewCandidates) {
+                            stopReason = "no new candidates";
                         } else {
                             stopReason = "max discovery rounds reached";
                         }
@@ -220,7 +252,6 @@ public class PlaylistGenerationService {
                     return generateWithExpansion(
                             originalRequest,
                             usedTrackKeys,
-                            playlistSize,
                             accessToken,
                             round + 1,
                             state
@@ -286,6 +317,9 @@ public class PlaylistGenerationService {
             ValidationState state
     ) {
         List<WeightedTrack> uniqueSortedTracks = dedupeCandidatesBeforeSpotify(sortedTracks);
+
+        state.candidatePoolGrew = uniqueSortedTracks.size() > state.lastCandidatePoolSize;
+        state.lastCandidatePoolSize = uniqueSortedTracks.size();
 
         System.out.println(
                 "ROUND " + round
@@ -470,14 +504,6 @@ public class PlaylistGenerationService {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Replacement request is missing the track to replace."
-            );
-        }
-
-        if (request.safeReplacementSearchSize() < MIN_PLAYLIST_SIZE
-                || request.safeReplacementSearchSize() > MAX_PLAYLIST_SIZE) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Replacement search size must be between 1 and 50."
             );
         }
     }
@@ -707,9 +733,14 @@ public class PlaylistGenerationService {
             return "";
         }
 
-        return normalizeArtistName(weightedTrack.track().artistName())
-                + "|"
-                + normalizeTrackTitle(weightedTrack.track().name());
+        String artistName = weightedTrack.track().artistName();
+        String title = TrackText.identityTitle(artistName, weightedTrack.track().name());
+
+        if (title.isBlank()) {
+            return "";
+        }
+
+        return normalizeArtistName(artistName) + "|" + title;
     }
 
     private String spotifyUri(WeightedTrack weightedTrack) {
@@ -723,40 +754,7 @@ public class PlaylistGenerationService {
     }
 
     private String normalizeArtistName(String artistName) {
-        if (artistName == null) {
-            return "";
-        }
-
-        return artistName.toLowerCase()
-                .replaceAll("[^a-z0-9]+", " ")
-                .trim();
-    }
-
-    private String normalizeTrackTitle(String value) {
-        if (value == null) {
-            return "";
-        }
-
-        return value.toLowerCase()
-                .replaceAll("♱", " ")
-                .replaceAll("^[^-]{1,80}\\s+-\\s+", "")
-                .replaceAll("\\[explicit\\]", "")
-                .replaceAll("\\(explicit\\)", "")
-                .replaceAll("\\[clean\\]", "")
-                .replaceAll("\\(clean\\)", "")
-                .replaceAll("\\([^)]*music video[^)]*\\)", "")
-                .replaceAll("\\[[^]]*music video[^]]*]", "")
-                .replaceAll("\\([^)]*mv[^)]*\\)", "")
-                .replaceAll("\\[[^]]*mv[^]]*]", "")
-                .replaceAll("\\([^)]*live[^)]*\\)", "")
-                .replaceAll("\\[[^]]*live[^]]*]", "")
-                .replaceAll("\\s+live\\s+complexcon\\s+\\d{4}.*$", "")
-                .replaceAll("\\s+complexcon\\s+\\d{4}.*$", "")
-                .replaceAll("^\\d+\\.\\s*", "")
-                .replaceAll("\\s+mv$", "")
-                .replaceAll("\\s+music\\s+video$", "")
-                .replaceAll("[^a-z0-9]+", " ")
-                .trim();
+        return TrackText.simplify(artistName);
     }
 
     private PlaylistGenerationRequest withDiscoveryLimit(
@@ -781,12 +779,12 @@ public class PlaylistGenerationService {
         );
     }
 
-    private Mono<Set<String>> loadUsedTrackKeys(PlaylistGenerationRequest request) {
+    private Mono<Set<String>> loadUsedTrackKeys(SpotifySession session, PlaylistGenerationRequest request) {
         if (!request.avoidUsedTracks()) {
             return Mono.just(Set.of());
         }
 
-        return playlistHistoryService.getUsedTrackKeys()
+        return playlistHistoryService.getUsedTrackKeys(session.spotifyUserId())
                 .collect(Collectors.toSet());
     }
 
@@ -807,11 +805,12 @@ public class PlaylistGenerationService {
             return false;
         }
 
+        String artist = normalizeArtistName(track.artistName());
+
         return request.restrictedArtists()
                 .stream()
-                .anyMatch(restrictedArtist ->
-                        restrictedArtist.equalsIgnoreCase(track.artistName())
-                );
+                .map(this::normalizeArtistName)
+                .anyMatch(restrictedArtist -> !restrictedArtist.isBlank() && restrictedArtist.equals(artist));
     }
 
     private static class ValidationState {
@@ -823,6 +822,8 @@ public class PlaylistGenerationService {
 
         private int attemptsRemaining;
         private int currentRound = 1;
+        private int lastCandidatePoolSize = 0;
+        private boolean candidatePoolGrew = false;
 
         private int spotifyResolved = 0;
         private int spotifyMissed = 0;

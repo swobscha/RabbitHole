@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 import spotifybot.model.SpotifyArtistSearchResult;
+import spotifybot.model.SpotifySession;
 import spotifybot.service.SpotifyArtistSearchService;
 
 import java.util.List;
@@ -24,8 +25,9 @@ public class SpotifyArtistController {
 
     @GetMapping("/search")
     public Mono<List<SpotifyArtistSearchResult>> searchArtists(
+            SpotifySession session,
             @RequestParam String query
     ) {
-        return spotifyArtistSearchService.searchArtists(query);
+        return spotifyArtistSearchService.searchArtists(session, query);
     }
 }

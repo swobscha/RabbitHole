@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 import spotifybot.model.PlaylistReplaceTrackRequest;
 import spotifybot.model.PlaylistReplaceTrackResult;
+import spotifybot.model.SpotifySession;
 import spotifybot.service.PlaylistGenerationService;
 
 @RestController
@@ -23,9 +24,10 @@ public class PlaylistReplacementController {
 
     @PostMapping("/replace-track")
     public Mono<PlaylistReplaceTrackResult> replaceTrack(
+            SpotifySession session,
             @RequestBody PlaylistReplaceTrackRequest request
     ) {
-        return playlistGenerationService.replaceTrack(request)
+        return playlistGenerationService.replaceTrack(session, request)
                 .map(PlaylistReplaceTrackResult::new);
     }
 }

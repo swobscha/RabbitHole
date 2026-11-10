@@ -1,25 +1,51 @@
 package spotifybot.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
+import spotifybot.model.SpotifySession;
 import tools.jackson.databind.JsonNode;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.time.Duration;
+import java.util.Base64;
+import java.util.regex.Pattern;
 
 @Service
 public class SpotifyAuthService {
 
-    private static final String SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
-    private static final long TOKEN_EXPIRY_BUFFER_MS = 60_000L;
+    private static final Logger log = LoggerFactory.getLogger(SpotifyAuthService.class);
 
+    private static final long TOKEN_EXPIRY_BUFFER_MS = 60_000L;
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(15);
+    private static final Duration SESSION_IDLE_LIMIT = Duration.ofDays(30);
+
+    private static final int RANDOM_TOKEN_BYTES = 32;
+    private static final Pattern SESSION_TOKEN_FORMAT = Pattern.compile("[A-Za-z0-9_-]{43}");
+    private static final String BEARER_PREFIX = "Bearer ";
+
+    private final SpotifySessionStore sessionStore;
     private final WebClient accountsWebClient;
+    private final WebClient apiWebClient;
+    private final String authorizeUrl;
+    private final SecureRandom secureRandom = new SecureRandom();
+
+    private final Cache<String, SpotifySession> activeSessions = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterAccess(Duration.ofHours(6))
+            .build();
 
     @Value("${SPOTIFY_CLIENT_ID:}")
     private String clientId;
@@ -30,17 +56,22 @@ public class SpotifyAuthService {
     @Value("${SPOTIFY_REDIRECT_URI:http://127.0.0.1:8080/api/spotify/callback}")
     private String redirectUri;
 
-    private volatile String accessToken = "";
-    private volatile String refreshToken = "";
-    private volatile long accessTokenExpiresAtMs = 0L;
-
-    public SpotifyAuthService() {
-        this.accountsWebClient = WebClient.builder()
-                .baseUrl("https://accounts.spotify.com")
-                .build();
+    public SpotifyAuthService(
+            SpotifySessionStore sessionStore,
+            @Value("${SPOTIFY_ACCOUNTS_URL:https://accounts.spotify.com}") String accountsUrl,
+            @Value("${SPOTIFY_API_URL:https://api.spotify.com/v1}") String apiUrl
+    ) {
+        this.sessionStore = sessionStore;
+        this.accountsWebClient = WebClient.builder().baseUrl(accountsUrl).build();
+        this.apiWebClient = WebClient.builder().baseUrl(apiUrl).build();
+        this.authorizeUrl = accountsUrl + "/authorize";
     }
 
-    public String buildAuthorizationUrl() {
+    public String newLoginState() {
+        return randomToken();
+    }
+
+    public String buildAuthorizationUrl(String state) {
         ensureSpotifyConfigPresent();
 
         String scope = String.join(" ",
@@ -50,55 +81,63 @@ public class SpotifyAuthService {
                 "user-read-email"
         );
 
-        return SPOTIFY_AUTHORIZE_URL
+        return authorizeUrl
                 + "?client_id=" + encode(clientId)
                 + "&response_type=code"
                 + "&redirect_uri=" + encode(redirectUri)
                 + "&scope=" + encode(scope)
+                + "&state=" + encode(state)
                 + "&show_dialog=true";
     }
 
-    public Mono<Void> handleCallback(String code) {
-        ensureSpotifyConfigPresent();
+    /** Exchanges an authorization code for a new session and returns its bearer token. */
+    public Mono<String> completeLogin(String code) {
+        return Mono.defer(() -> {
+            ensureSpotifyConfigPresent();
 
-        if (code == null || code.isBlank()) {
-            return Mono.error(new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Spotify callback did not include an authorization code."
-            ));
-        }
-
-        return accountsWebClient.post()
-                .uri("/api/token")
-                .headers(headers -> headers.setBasicAuth(clientId, clientSecret))
-                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                .body(BodyInserters
-                        .fromFormData("grant_type", "authorization_code")
-                        .with("code", code)
-                        .with("redirect_uri", redirectUri))
-                .retrieve()
-                .bodyToMono(JsonNode.class)
-                .doOnNext(this::saveTokenResponse)
-                .then();
+            return requestTokens(BodyInserters
+                    .fromFormData("grant_type", "authorization_code")
+                    .with("code", code)
+                    .with("redirect_uri", redirectUri))
+                    .flatMap(tokens -> fetchSpotifyUserId(requireAccessToken(tokens))
+                            .flatMap(spotifyUserId -> createSession(spotifyUserId, tokens)));
+        });
     }
 
-    public Mono<String> getValidAccessToken() {
-        if (hasUsableAccessToken()) {
-            return Mono.just(accessToken);
+    /** Finds the session for an Authorization header, or completes empty if there is none. */
+    public Mono<SpotifySession> findSession(String authorizationHeader) {
+        String token = bearerToken(authorizationHeader);
+
+        if (token.isEmpty()) {
+            return Mono.empty();
         }
 
-        if (refreshToken != null && !refreshToken.isBlank()) {
-            return refreshAccessToken();
+        String lookupId = SpotifySessionStore.lookupId(token);
+        SpotifySession cached = activeSessions.getIfPresent(lookupId);
+
+        if (cached != null) {
+            return Mono.just(cached);
         }
 
-        return Mono.error(new ResponseStatusException(
-                HttpStatus.UNAUTHORIZED,
-                "Spotify is not connected. Connect Spotify and try again."
-        ));
+        return sessionStore.load(token)
+                .doOnNext(session -> activeSessions.put(lookupId, session));
     }
 
-    public boolean isConnected() {
-        return hasUsableAccessToken() || (refreshToken != null && !refreshToken.isBlank());
+    public Mono<SpotifySession> requireSession(String authorizationHeader) {
+        return findSession(authorizationHeader)
+                .switchIfEmpty(Mono.error(this::notConnected));
+    }
+
+    public Mono<String> getValidAccessToken(SpotifySession session) {
+        if (session.hasUsableAccessToken()) {
+            return Mono.just(session.accessToken());
+        }
+
+        return session.refreshOnce(() -> refreshAccessToken(session));
+    }
+
+    public Mono<Void> logout(String authorizationHeader) {
+        return findSession(authorizationHeader).flatMap(this::endSession);
     }
 
     public boolean isConfigured() {
@@ -118,71 +157,157 @@ public class SpotifyAuthService {
         return redirectUri.trim();
     }
 
-    public void clearTokens() {
-        accessToken = "";
-        refreshToken = "";
-        accessTokenExpiresAtMs = 0L;
-    }
+    private Mono<String> createSession(String spotifyUserId, JsonNode tokens) {
+        String refreshToken = tokens.path("refresh_token").asText("");
 
-    private Mono<String> refreshAccessToken() {
-        ensureSpotifyConfigPresent();
-
-        if (refreshToken == null || refreshToken.isBlank()) {
+        if (refreshToken.isBlank()) {
             return Mono.error(new ResponseStatusException(
-                    HttpStatus.UNAUTHORIZED,
-                    "Spotify is not connected. Connect Spotify and try again."
+                    HttpStatus.BAD_GATEWAY,
+                    "Spotify did not return a refresh token."
             ));
         }
 
+        String token = randomToken();
+        SpotifySession session = new SpotifySession(token, spotifyUserId, refreshToken);
+
+        applyTokenResponse(session, tokens);
+        activeSessions.put(SpotifySessionStore.lookupId(token), session);
+
+        long idleCutoffMs = System.currentTimeMillis() - SESSION_IDLE_LIMIT.toMillis();
+
+        return sessionStore.deleteIdleSince(idleCutoffMs)
+                .then(sessionStore.save(session))
+                .onErrorResume(error -> {
+                    log.error("Could not persist a Spotify session; it will last until the next restart.", error);
+                    return Mono.empty();
+                })
+                .thenReturn(token);
+    }
+
+    private Mono<String> refreshAccessToken(SpotifySession session) {
+        return Mono.defer(() -> {
+            ensureSpotifyConfigPresent();
+
+            return requestTokens(BodyInserters
+                    .fromFormData("grant_type", "refresh_token")
+                    .with("refresh_token", session.refreshToken()));
+        })
+                .flatMap(tokens -> {
+                    String accessToken = applyTokenResponse(session, tokens);
+
+                    return sessionStore.recordRefresh(session)
+                            .onErrorResume(error -> {
+                                log.error("Could not persist a refreshed Spotify session.", error);
+                                return Mono.empty();
+                            })
+                            .thenReturn(accessToken);
+                })
+                .onErrorResume(WebClientResponseException.class, error -> {
+                    log.warn("Spotify token refresh failed with status {}.", error.getStatusCode().value());
+
+                    if (error.getStatusCode().value() == 400) {
+                        return endSession(session).then(Mono.<String>error(connectionExpired()));
+                    }
+
+                    return Mono.error(new ResponseStatusException(
+                            HttpStatus.SERVICE_UNAVAILABLE,
+                            "Spotify is temporarily unavailable. Try again in a moment."
+                    ));
+                });
+    }
+
+    private Mono<Void> endSession(SpotifySession session) {
+        activeSessions.invalidate(SpotifySessionStore.lookupId(session.token()));
+
+        return sessionStore.delete(session.token());
+    }
+
+    private Mono<JsonNode> requestTokens(BodyInserters.FormInserter<String> form) {
         return accountsWebClient.post()
                 .uri("/api/token")
                 .headers(headers -> headers.setBasicAuth(clientId, clientSecret))
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                .body(BodyInserters
-                        .fromFormData("grant_type", "refresh_token")
-                        .with("refresh_token", refreshToken))
+                .body(form)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .map(json -> {
-                    saveTokenResponse(json);
-                    return accessToken;
-                });
+                .timeout(REQUEST_TIMEOUT);
     }
 
-    private boolean hasUsableAccessToken() {
-        return accessToken != null
-                && !accessToken.isBlank()
-                && System.currentTimeMillis() < accessTokenExpiresAtMs;
+    private Mono<String> fetchSpotifyUserId(String accessToken) {
+        return apiWebClient.get()
+                .uri("/me")
+                .headers(headers -> headers.setBearerAuth(accessToken))
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .timeout(REQUEST_TIMEOUT)
+                .map(json -> json.path("id").asText(""))
+                .filter(id -> !id.isBlank())
+                .switchIfEmpty(Mono.error(() -> new ResponseStatusException(
+                        HttpStatus.BAD_GATEWAY,
+                        "Spotify did not return an account id."
+                )))
+                .onErrorMap(WebClientResponseException.Forbidden.class, error -> new ResponseStatusException(
+                        HttpStatus.FORBIDDEN,
+                        "This Spotify account is not allowed to use this app yet. "
+                                + "The app owner can add it in the Spotify developer dashboard."
+                ));
     }
 
-    private void saveTokenResponse(JsonNode json) {
-        String newAccessToken = json.path("access_token").asText("");
-        String newRefreshToken = json.path("refresh_token").asText("");
-        long expiresInSeconds = json.path("expires_in").asLong(3600L);
+    private String requireAccessToken(JsonNode tokens) {
+        String accessToken = tokens.path("access_token").asText("");
 
-        if (newAccessToken == null || newAccessToken.isBlank()) {
+        if (accessToken.isBlank()) {
             throw new ResponseStatusException(
-                    HttpStatus.UNAUTHORIZED,
+                    HttpStatus.BAD_GATEWAY,
                     "Spotify did not return an access token."
             );
         }
 
-        accessToken = newAccessToken;
+        return accessToken;
+    }
 
-        if (newRefreshToken != null && !newRefreshToken.isBlank()) {
-            refreshToken = newRefreshToken;
+    private String applyTokenResponse(SpotifySession session, JsonNode tokens) {
+        String accessToken = requireAccessToken(tokens);
+        long expiresInSeconds = tokens.path("expires_in").asLong(3600L);
+        long safeExpiresInMs = Math.max(60L, expiresInSeconds) * 1000L;
+
+        session.updateTokens(
+                accessToken,
+                tokens.path("refresh_token").asText(""),
+                System.currentTimeMillis() + safeExpiresInMs - TOKEN_EXPIRY_BUFFER_MS
+        );
+
+        return accessToken;
+    }
+
+    private String bearerToken(String authorizationHeader) {
+        if (authorizationHeader == null || !authorizationHeader.startsWith(BEARER_PREFIX)) {
+            return "";
         }
 
-        long safeExpiresInMs = Math.max(60L, expiresInSeconds) * 1000L;
-        accessTokenExpiresAtMs = System.currentTimeMillis()
-                + safeExpiresInMs
-                - TOKEN_EXPIRY_BUFFER_MS;
+        String token = authorizationHeader.substring(BEARER_PREFIX.length()).trim();
 
-        System.out.println(
-                "Spotify tokens saved"
-                        + " | expiresInSeconds=" + expiresInSeconds
-                        + " | hasRefreshToken=" + (refreshToken != null && !refreshToken.isBlank())
-                        + " | redirectUri=" + redirectUri
+        return SESSION_TOKEN_FORMAT.matcher(token).matches() ? token : "";
+    }
+
+    private String randomToken() {
+        byte[] bytes = new byte[RANDOM_TOKEN_BYTES];
+        secureRandom.nextBytes(bytes);
+
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    private ResponseStatusException notConnected() {
+        return new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Spotify is not connected. Connect Spotify and try again."
+        );
+    }
+
+    private ResponseStatusException connectionExpired() {
+        return new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Your Spotify connection has expired. Connect Spotify and try again."
         );
     }
 

@@ -13,6 +13,7 @@ import spotifybot.model.CreatedPlaylistResponse;
 import spotifybot.model.PlaylistCreateRequest;
 import spotifybot.model.PlaylistGenerationRequest;
 import spotifybot.model.PlaylistGenerationResult;
+import spotifybot.model.SpotifySession;
 import spotifybot.service.PlaylistGenerationService;
 import spotifybot.service.PlaylistHistoryService;
 import spotifybot.service.SpotifyPlaylistService;
@@ -41,30 +42,32 @@ public class PlaylistController {
 
     @PostMapping("/generate")
     public Mono<PlaylistGenerationResult> generatePlaylist(
+            SpotifySession session,
             @RequestBody PlaylistGenerationRequest request
     ) {
-        return playlistGenerationService.generatePlaylist(request);
+        return playlistGenerationService.generatePlaylist(session, request);
     }
 
     @PostMapping("/create")
     public Mono<CreatedPlaylistResponse> createPlaylist(
+            SpotifySession session,
             @RequestBody PlaylistCreateRequest request
     ) {
-        return spotifyPlaylistService.createPlaylist(request);
+        return spotifyPlaylistService.createPlaylist(session, request);
     }
 
     @GetMapping("/history")
-    public Mono<List<CreatedPlaylistHistoryItem>> getHistory() {
-        return playlistHistoryService.getHistory().collectList();
+    public Mono<List<CreatedPlaylistHistoryItem>> getHistory(SpotifySession session) {
+        return playlistHistoryService.getHistory(session.spotifyUserId()).collectList();
     }
 
     @DeleteMapping("/history")
-    public Mono<Void> clearHistory() {
-        return playlistHistoryService.clearHistory();
+    public Mono<Void> clearHistory(SpotifySession session) {
+        return playlistHistoryService.clearHistory(session.spotifyUserId());
     }
 
     @GetMapping("/demo")
-    public Mono<PlaylistGenerationResult> demoPlaylist() {
+    public Mono<PlaylistGenerationResult> demoPlaylist(SpotifySession session) {
         PlaylistGenerationRequest request = new PlaylistGenerationRequest(
                 "Daft Punk",
                 null,
@@ -82,6 +85,6 @@ public class PlaylistController {
                 100
         );
 
-        return playlistGenerationService.generatePlaylist(request);
+        return playlistGenerationService.generatePlaylist(session, request);
     }
 }

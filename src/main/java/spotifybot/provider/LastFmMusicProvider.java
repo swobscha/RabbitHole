@@ -1,53 +1,105 @@
 package spotifybot.provider;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import spotifybot.config.LastFmProperties;
 import spotifybot.model.PlaylistGenerationRequest;
 import spotifybot.model.TrackCandidate;
+import spotifybot.service.TrackText;
 import tools.jackson.databind.JsonNode;
 
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class LastFmMusicProvider implements MusicApiProvider {
 
+    private static final Logger log = LoggerFactory.getLogger(LastFmMusicProvider.class);
+
     private static final int MIN_SIMILAR_ARTIST_LIMIT = 100;
     private static final int MAX_SIMILAR_ARTIST_LIMIT = 2000;
     private static final int MAX_ARTISTS_TO_EXPLORE = 500;
+    private static final int MAX_ARTIST_STAT_LOOKUPS = 600;
     private static final int TRACKS_PER_PAGE = 10;
+    private static final int MAX_TAGS = 6;
+
+    private static final int LASTFM_INVALID_PARAMETERS = 6;
+    private static final int LASTFM_INVALID_API_KEY = 10;
+    private static final int LASTFM_SUSPENDED_API_KEY = 26;
+    private static final int LASTFM_RATE_LIMITED = 29;
+
+    private static final String REJECTED_KEY_MESSAGE = "Last.fm rejected the API key. Check LASTFM_API_KEY.";
 
     private static final long RATE_LIMIT_BACKOFF_MS = 60_000;
+    private static final long RECENT_FAILURE_WINDOW_MS = 30_000;
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+
+    // Last.fm asks for at most 5 requests per second averaged over 5 minutes. Short bursts are fine.
+    private static final long MIN_REQUEST_SPACING_MS = 200;
+    private static final long BURST_WINDOW_MS = 60_000;
+
+    private static final Duration CACHE_LIFETIME = Duration.ofHours(24);
 
     private final LastFmProperties properties;
     private final WebClient webClient;
 
-    private final Map<String, List<ArtistSeed>> similarArtistCache = new ConcurrentHashMap<>();
-    private final Map<String, ArtistSeed> artistInfoCache = new ConcurrentHashMap<>();
-    private final Map<String, List<IndexedTrackNode>> topTrackPageCache = new ConcurrentHashMap<>();
-    private final Map<String, TrackInfo> trackInfoCache = new ConcurrentHashMap<>();
-    private final Map<String, Set<String>> trackTagsCache = new ConcurrentHashMap<>();
+    private final Cache<String, List<ArtistSeed>> similarArtistCache = newCache(200);
+    private final Cache<String, ArtistSeed> artistInfoCache = newCache(10_000);
+    private final Cache<String, List<TopTrack>> topTracksCache = newCache(2_000);
+    private final Cache<String, TrackInfo> trackInfoCache = newCache(5_000);
+    private final Cache<String, Set<String>> artistTagsCache = newCache(5_000);
+
+    private final AtomicLong nextRequestSlotMs = new AtomicLong();
 
     private volatile long rateLimitedUntilMs = 0;
+    private volatile long lastFailureAtMs = 0;
 
-    public LastFmMusicProvider(LastFmProperties properties) {
+    public LastFmMusicProvider(
+            LastFmProperties properties,
+            @Value("${LASTFM_API_URL:https://ws.audioscrobbler.com}") String apiUrl
+    ) {
         this.properties = properties;
         this.webClient = WebClient.builder()
-                .baseUrl("https://ws.audioscrobbler.com")
+                .baseUrl(apiUrl)
+                .build();
+    }
+
+    private static <V> Cache<String, V> newCache(int maxEntries) {
+        return Caffeine.newBuilder()
+                .maximumSize(maxEntries)
+                .expireAfterWrite(CACHE_LIFETIME)
                 .build();
     }
 
     @Override
     public Flux<TrackCandidate> findCandidateTracks(PlaylistGenerationRequest request) {
+        if (properties.getApiKey() == null || properties.getApiKey().isBlank()) {
+            return Flux.error(new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Last.fm is not configured. Set LASTFM_API_KEY."
+            ));
+        }
+
         List<String> startingArtists = buildStartingArtists(request);
 
         if (startingArtists.isEmpty()) {
@@ -66,13 +118,50 @@ public class LastFmMusicProvider implements MusicApiProvider {
                         2
                 )
                 .filter(seed -> seed.name() != null && !seed.name().isBlank())
-                .distinct(seed -> seed.name().toLowerCase())
-                .flatMap(this::enrichArtistSeed, 4)
+                .distinct(seed -> seed.name().toLowerCase(Locale.ROOT))
                 .collectList()
-                .flatMapMany(artistSeeds -> Flux.fromIterable(rankArtists(artistSeeds, request)))
-                .take(artistsToExplore)
+                .flatMapMany(artistSeeds -> selectArtistsToExplore(artistSeeds, request, artistsToExplore))
                 .flatMap(artistSeed -> findTopTracksForArtist(artistSeed, request), 4)
-                .distinct(track -> (track.artistName() + "|" + track.name()).toLowerCase());
+                .distinct(track -> (track.artistName() + "|" + track.name()).toLowerCase(Locale.ROOT))
+                .switchIfEmpty(Flux.defer(this::errorIfLastFmWasUnavailable));
+    }
+
+    /** Only look up listener counts before ranking when the ranking actually uses them. */
+    private Flux<ArtistSeed> selectArtistsToExplore(
+            List<ArtistSeed> artistSeeds,
+            PlaylistGenerationRequest request,
+            int artistsToExplore
+    ) {
+        if (clamp(request.nicheArtistScale()) > 0) {
+            return Flux.fromIterable(artistSeeds)
+                    .take(MAX_ARTIST_STAT_LOOKUPS)
+                    .flatMap(this::enrichArtistSeed, 4)
+                    .collectList()
+                    .flatMapMany(enriched -> Flux.fromIterable(rankArtists(enriched, request)))
+                    .take(artistsToExplore);
+        }
+
+        return Flux.fromIterable(rankArtists(artistSeeds, request))
+                .take(artistsToExplore)
+                .flatMap(this::enrichArtistSeed, 4);
+    }
+
+    private Flux<TrackCandidate> errorIfLastFmWasUnavailable() {
+        if (isRateLimited()) {
+            return Flux.error(new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    "Last.fm is rate-limiting requests. Wait about a minute and try again."
+            ));
+        }
+
+        if (System.currentTimeMillis() - lastFailureAtMs < RECENT_FAILURE_WINDOW_MS) {
+            return Flux.error(new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Last.fm could not be reached. Try again in a moment."
+            ));
+        }
+
+        return Flux.empty();
     }
 
     private List<String> buildStartingArtists(PlaylistGenerationRequest request) {
@@ -157,7 +246,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
     private Flux<ArtistSeed> findSimilarArtists(String artistName, int limit) {
         String cacheKey = cleanKey(artistName) + "|limit:" + limit;
 
-        List<ArtistSeed> cached = similarArtistCache.get(cacheKey);
+        List<ArtistSeed> cached = similarArtistCache.getIfPresent(cacheKey);
 
         if (cached != null) {
             return Flux.fromIterable(cached);
@@ -167,18 +256,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
             return Flux.empty();
         }
 
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/2.0/")
-                        .queryParam("method", "artist.getsimilar")
-                        .queryParam("artist", artistName)
-                        .queryParam("limit", limit)
-                        .queryParam("autocorrect", 1)
-                        .queryParam("api_key", properties.getApiKey())
-                        .queryParam("format", "json")
-                        .build())
-                .retrieve()
-                .bodyToMono(JsonNode.class)
+        return callLastFm("artist.getsimilar", Map.of("artist", artistName, "limit", String.valueOf(limit)))
                 .flatMapMany(json -> {
                     if (hasLastFmError(json)) {
                         handleLastFmError(json);
@@ -217,7 +295,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
     private Mono<ArtistSeed> enrichArtistSeed(ArtistSeed seed) {
         String cacheKey = cleanKey(seed.name());
 
-        ArtistSeed cached = artistInfoCache.get(cacheKey);
+        ArtistSeed cached = artistInfoCache.getIfPresent(cacheKey);
 
         if (cached != null) {
             return Mono.just(new ArtistSeed(
@@ -234,17 +312,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
             return Mono.just(seed);
         }
 
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/2.0/")
-                        .queryParam("method", "artist.getinfo")
-                        .queryParam("artist", seed.name())
-                        .queryParam("autocorrect", 1)
-                        .queryParam("api_key", properties.getApiKey())
-                        .queryParam("format", "json")
-                        .build())
-                .retrieve()
-                .bodyToMono(JsonNode.class)
+        return callLastFm("artist.getinfo", Map.of("artist", seed.name()))
                 .map(json -> {
                     if (hasLastFmError(json)) {
                         handleLastFmError(json);
@@ -364,24 +432,37 @@ public class LastFmMusicProvider implements MusicApiProvider {
             ArtistSeed artistSeed,
             PlaylistGenerationRequest request
     ) {
-        return Flux.fromIterable(trackPagesToFetch(request))
-                .flatMap(page -> fetchTopTrackPage(artistSeed, page), 2)
-                .flatMap(indexedTrack ->
-                                buildTrackCandidate(
-                                        artistSeed,
-                                        indexedTrack.trackNode(),
-                                        indexedTrack.globalRank(),
-                                        request
-                                ),
-                        4
+        List<Integer> pages = trackPagesToFetch(request);
+        Set<Integer> wantedPages = new HashSet<>(pages);
+        int trackLimit = Collections.max(pages) * TRACKS_PER_PAGE;
+
+        Mono<Set<String>> artistTags = shouldFetchTags(request)
+                ? findTopTagsForArtist(artistSeed.name())
+                : Mono.just(Set.of());
+
+        return artistTags
+                .flatMapMany(tags -> fetchTopTracks(artistSeed, trackLimit)
+                        .filter(track -> wantedPages.contains(pageOfRank(track.globalRank())))
+                        .flatMap(track -> buildTrackCandidate(artistSeed, track, tags, request), 4)
                 )
-                .onErrorResume(error -> Flux.empty());
+                .onErrorResume(
+                        error -> !(error instanceof ResponseStatusException),
+                        error -> {
+                            handleRequestError(error);
+                            return Flux.empty();
+                        }
+                );
     }
 
-    private Flux<IndexedTrackNode> fetchTopTrackPage(ArtistSeed artistSeed, int page) {
-        String cacheKey = cleanKey(artistSeed.name()) + "|page:" + page + "|limit:" + TRACKS_PER_PAGE;
+    private int pageOfRank(int globalRank) {
+        return ((globalRank - 1) / TRACKS_PER_PAGE) + 1;
+    }
 
-        List<IndexedTrackNode> cached = topTrackPageCache.get(cacheKey);
+    /** One request covers every wanted page, and each track already includes its listener counts. */
+    private Flux<TopTrack> fetchTopTracks(ArtistSeed artistSeed, int limit) {
+        String cacheKey = cleanKey(artistSeed.name()) + "|limit:" + limit;
+
+        List<TopTrack> cached = topTracksCache.getIfPresent(cacheKey);
 
         if (cached != null) {
             return Flux.fromIterable(cached);
@@ -391,19 +472,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
             return Flux.empty();
         }
 
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/2.0/")
-                        .queryParam("method", "artist.gettoptracks")
-                        .queryParam("artist", artistSeed.name())
-                        .queryParam("limit", TRACKS_PER_PAGE)
-                        .queryParam("page", page)
-                        .queryParam("autocorrect", 1)
-                        .queryParam("api_key", properties.getApiKey())
-                        .queryParam("format", "json")
-                        .build())
-                .retrieve()
-                .bodyToMono(JsonNode.class)
+        return callLastFm("artist.gettoptracks", Map.of("artist", artistSeed.name(), "limit", String.valueOf(limit)))
                 .flatMapMany(json -> {
                     if (hasLastFmError(json)) {
                         handleLastFmError(json);
@@ -416,14 +485,21 @@ public class LastFmMusicProvider implements MusicApiProvider {
                         return Flux.empty();
                     }
 
-                    List<IndexedTrackNode> tracks = new ArrayList<>();
+                    List<TopTrack> tracks = new ArrayList<>();
 
                     for (int i = 0; i < tracksNode.size(); i++) {
-                        int globalRank = ((page - 1) * TRACKS_PER_PAGE) + i + 1;
-                        tracks.add(new IndexedTrackNode(tracksNode.get(i), globalRank));
+                        JsonNode trackNode = tracksNode.get(i);
+
+                        tracks.add(new TopTrack(
+                                trackNode.path("name").asText(""),
+                                trackNode.path("artist").path("name").asText(artistSeed.name()),
+                                parseLong(trackNode.path("listeners").asText("")),
+                                parseLong(trackNode.path("playcount").asText("")),
+                                i + 1
+                        ));
                     }
 
-                    topTrackPageCache.put(cacheKey, tracks);
+                    topTracksCache.put(cacheKey, tracks);
 
                     return Flux.fromIterable(tracks);
                 })
@@ -435,32 +511,27 @@ public class LastFmMusicProvider implements MusicApiProvider {
 
     private Mono<TrackCandidate> buildTrackCandidate(
             ArtistSeed artistSeed,
-            JsonNode trackNode,
-            int globalRank,
+            TopTrack topTrack,
+            Set<String> artistTags,
             PlaylistGenerationRequest request
     ) {
-        String trackName = trackNode.path("name").asText("");
-        String artistName = trackNode.path("artist").path("name").asText(artistSeed.name());
+        String trackName = topTrack.name();
+        String artistName = topTrack.artistName();
 
         if (trackName.isBlank() || artistName.isBlank()) {
             return Mono.empty();
         }
 
-        int sourceScore = calculateSourceScore(globalRank, artistSeed.match());
+        int sourceScore = calculateSourceScore(topTrack.globalRank(), artistSeed.match());
 
-        Mono<Set<String>> tagsMono = shouldFetchTags(request)
-                ? findTopTagsForTrack(artistName, trackName)
-                : Mono.just(Set.of());
+        boolean statsMissing = topTrack.listeners() == null && topTrack.playcount() == null;
 
-        Mono<TrackInfo> trackInfoMono = shouldFetchTrackInfo(request)
+        Mono<TrackInfo> trackInfoMono = statsMissing && shouldFetchTrackInfo(request)
                 ? findTrackInfo(artistName, trackName)
-                : Mono.just(new TrackInfo(null, null, "Unknown Album"));
+                : Mono.just(new TrackInfo(topTrack.listeners(), topTrack.playcount(), "Unknown Album"));
 
-        return Mono.zip(tagsMono, trackInfoMono)
-                .map(tuple -> {
-                    Set<String> tags = tuple.getT1();
-                    TrackInfo trackInfo = tuple.getT2();
-
+        return trackInfoMono
+                .map(trackInfo -> {
                     String albumName = trackInfo.albumName() == null || trackInfo.albumName().isBlank()
                             ? "Unknown Album"
                             : trackInfo.albumName();
@@ -472,7 +543,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
                             artistName,
                             albumName,
                             sourceScore,
-                            tags,
+                            artistTags,
                             "lastfm",
                             null,
                             artistSeed.listeners(),
@@ -495,7 +566,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
     private Mono<TrackInfo> findTrackInfo(String artistName, String trackName) {
         String cacheKey = cleanKey(artistName) + "|" + cleanKey(trackName);
 
-        TrackInfo cached = trackInfoCache.get(cacheKey);
+        TrackInfo cached = trackInfoCache.getIfPresent(cacheKey);
 
         if (cached != null) {
             return Mono.just(cached);
@@ -505,18 +576,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
             return Mono.just(new TrackInfo(null, null, "Unknown Album"));
         }
 
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/2.0/")
-                        .queryParam("method", "track.getinfo")
-                        .queryParam("artist", artistName)
-                        .queryParam("track", trackName)
-                        .queryParam("autocorrect", 1)
-                        .queryParam("api_key", properties.getApiKey())
-                        .queryParam("format", "json")
-                        .build())
-                .retrieve()
-                .bodyToMono(JsonNode.class)
+        return callLastFm("track.getinfo", Map.of("artist", artistName, "track", trackName))
                 .map(json -> {
                     if (hasLastFmError(json)) {
                         handleLastFmError(json);
@@ -540,10 +600,11 @@ public class LastFmMusicProvider implements MusicApiProvider {
                 });
     }
 
-    private Mono<Set<String>> findTopTagsForTrack(String artistName, String trackName) {
-        String cacheKey = cleanKey(artistName) + "|" + cleanKey(trackName);
+    /** Tags are fetched per artist because per-track lookups cost one request for every candidate. */
+    private Mono<Set<String>> findTopTagsForArtist(String artistName) {
+        String cacheKey = cleanKey(artistName);
 
-        Set<String> cached = trackTagsCache.get(cacheKey);
+        Set<String> cached = artistTagsCache.getIfPresent(cacheKey);
 
         if (cached != null) {
             return Mono.just(cached);
@@ -553,18 +614,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
             return Mono.just(Set.of());
         }
 
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/2.0/")
-                        .queryParam("method", "track.gettoptags")
-                        .queryParam("artist", artistName)
-                        .queryParam("track", trackName)
-                        .queryParam("autocorrect", 1)
-                        .queryParam("api_key", properties.getApiKey())
-                        .queryParam("format", "json")
-                        .build())
-                .retrieve()
-                .bodyToMono(JsonNode.class)
+        return callLastFm("artist.gettoptags", Map.of("artist", artistName))
                 .map(json -> {
                     if (hasLastFmError(json)) {
                         handleLastFmError(json);
@@ -579,18 +629,18 @@ public class LastFmMusicProvider implements MusicApiProvider {
                     }
 
                     tagsNode.forEach(tagNode -> {
-                        if (tags.size() >= 6) {
+                        if (tags.size() >= MAX_TAGS) {
                             return;
                         }
 
                         String tagName = tagNode.path("name").asText("");
 
                         if (!tagName.isBlank()) {
-                            tags.add(tagName.toLowerCase());
+                            tags.add(tagName.toLowerCase(Locale.ROOT));
                         }
                     });
 
-                    trackTagsCache.put(cacheKey, tags);
+                    artistTagsCache.put(cacheKey, tags);
 
                     return tags;
                 })
@@ -600,6 +650,42 @@ public class LastFmMusicProvider implements MusicApiProvider {
                 });
     }
 
+    private Mono<JsonNode> callLastFm(String method, Map<String, String> parameters) {
+        return Mono.defer(() -> {
+            Map<String, Object> uriVariables = new HashMap<>(parameters);
+            uriVariables.put("api_key", properties.getApiKey());
+
+            Mono<JsonNode> request = webClient.get()
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/2.0/")
+                                .queryParam("method", method)
+                                .queryParam("autocorrect", 1)
+                                .queryParam("format", "json")
+                                .queryParam("api_key", "{api_key}");
+
+                        parameters.keySet().forEach(name -> uriBuilder.queryParam(name, "{" + name + "}"));
+
+                        return uriBuilder.build(uriVariables);
+                    })
+                    .retrieve()
+                    .bodyToMono(JsonNode.class)
+                    .timeout(REQUEST_TIMEOUT);
+
+            long waitMs = reserveRequestSlot();
+
+            return waitMs > 0 ? Mono.delay(Duration.ofMillis(waitMs)).then(request) : request;
+        });
+    }
+
+    private long reserveRequestSlot() {
+        long now = System.currentTimeMillis();
+        long slot = nextRequestSlotMs.updateAndGet(
+                previous -> Math.max(previous, now - BURST_WINDOW_MS) + MIN_REQUEST_SPACING_MS
+        );
+
+        return slot - now;
+    }
+
     private boolean hasLastFmError(JsonNode json) {
         return json != null && json.has("error");
     }
@@ -607,17 +693,47 @@ public class LastFmMusicProvider implements MusicApiProvider {
     private void handleLastFmError(JsonNode json) {
         int errorCode = json.path("error").asInt(-1);
 
-        if (errorCode == 29) {
+        if (errorCode == LASTFM_INVALID_API_KEY || errorCode == LASTFM_SUSPENDED_API_KEY) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, REJECTED_KEY_MESSAGE);
+        }
+
+        if (errorCode == LASTFM_RATE_LIMITED) {
+            log.warn("Last.fm rate limit reached; pausing requests for {} ms.", RATE_LIMIT_BACKOFF_MS);
             rateLimitedUntilMs = System.currentTimeMillis() + RATE_LIMIT_BACKOFF_MS;
+            return;
+        }
+
+        if (errorCode != LASTFM_INVALID_PARAMETERS) {
+            log.warn("Last.fm returned error code {}.", errorCode);
+            lastFailureAtMs = System.currentTimeMillis();
         }
     }
 
     private void handleRequestError(Throwable error) {
-        if (error instanceof WebClientResponseException responseException) {
-            if (responseException.getStatusCode().value() == 429) {
-                rateLimitedUntilMs = System.currentTimeMillis() + RATE_LIMIT_BACKOFF_MS;
-            }
+        if (error instanceof ResponseStatusException statusException) {
+            throw statusException;
         }
+
+        if (error instanceof WebClientResponseException responseException) {
+            int status = responseException.getStatusCode().value();
+
+            if (status == 403) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, REJECTED_KEY_MESSAGE);
+            }
+
+            if (status == 429) {
+                log.warn("Last.fm rate limit reached; pausing requests for {} ms.", RATE_LIMIT_BACKOFF_MS);
+                rateLimitedUntilMs = System.currentTimeMillis() + RATE_LIMIT_BACKOFF_MS;
+                return;
+            }
+
+            log.warn("Last.fm request failed with status {}.", status);
+        } else {
+            // The exception message can include the request URL, which contains the API key.
+            log.warn("Last.fm request failed: {}", error.getClass().getSimpleName());
+        }
+
+        lastFailureAtMs = System.currentTimeMillis();
     }
 
     private boolean isRateLimited() {
@@ -683,15 +799,11 @@ public class LastFmMusicProvider implements MusicApiProvider {
             return "";
         }
 
-        return value.toLowerCase()
-                .replaceAll("[^a-z0-9]+", " ")
-                .trim();
+        return value.trim().toLowerCase(Locale.ROOT);
     }
 
     private String slugify(String value) {
-        return value.toLowerCase()
-                .replaceAll("[^a-z0-9]+", "-")
-                .replaceAll("(^-|-$)", "");
+        return TrackText.simplify(value).replace(' ', '-');
     }
 
     private record ArtistSeed(
@@ -711,8 +823,11 @@ public class LastFmMusicProvider implements MusicApiProvider {
     ) {
     }
 
-    private record IndexedTrackNode(
-            JsonNode trackNode,
+    private record TopTrack(
+            String name,
+            String artistName,
+            Long listeners,
+            Long playcount,
             int globalRank
     ) {
     }

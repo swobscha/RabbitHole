@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
@@ -13,6 +14,7 @@ import spotifybot.model.ApiErrorResponse;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.concurrent.TimeoutException;
 
 @RestControllerAdvice
 public class GlobalApiExceptionHandler {
@@ -59,6 +61,22 @@ public class GlobalApiExceptionHandler {
         return Mono.just(ResponseEntity
                 .status(statusCode)
                 .body(buildError(statusCode, message, exchange)));
+    }
+
+    @ExceptionHandler({TimeoutException.class, WebClientRequestException.class})
+    public Mono<ResponseEntity<ApiErrorResponse>> handleUnreachableService(
+            Exception error,
+            ServerWebExchange exchange
+    ) {
+        HttpStatus status = HttpStatus.SERVICE_UNAVAILABLE;
+
+        return Mono.just(ResponseEntity
+                .status(status)
+                .body(buildError(
+                        status,
+                        "A music service could not be reached. Try again in a moment.",
+                        exchange
+                )));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

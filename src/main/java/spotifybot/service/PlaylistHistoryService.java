@@ -1,5 +1,6 @@
 package spotifybot.service;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -28,6 +29,7 @@ public class PlaylistHistoryService {
     }
 
     public Mono<Void> save(
+            String spotifyUserId,
             PlaylistCreateRequest request,
             CreatedPlaylistResponse response,
             List<ResolvedPlaylistTrack> resolvedTracks
@@ -38,6 +40,7 @@ public class PlaylistHistoryService {
         return databaseClient.sql("""
                         INSERT INTO created_playlists (
                             id,
+                            spotify_user_id,
                             playlist_name,
                             seed_artist,
                             track_count,
@@ -46,6 +49,7 @@ public class PlaylistHistoryService {
                         )
                         VALUES (
                             :id,
+                            :spotifyUserId,
                             :playlistName,
                             :seedArtist,
                             :trackCount,
@@ -54,6 +58,7 @@ public class PlaylistHistoryService {
                         )
                         """)
                 .bind("id", playlistId)
+                .bind("spotifyUserId", spotifyUserId)
                 .bind("playlistName", safe(response.playlistName()))
                 .bind("seedArtist", safe(request.seedArtist()))
                 .bind("trackCount", response.trackCount())
@@ -61,10 +66,10 @@ public class PlaylistHistoryService {
                 .bind("createdAt", createdAt)
                 .fetch()
                 .rowsUpdated()
-                .then(saveUsedTracks(playlistId, resolvedTracks, createdAt));
+                .then(saveUsedTracks(spotifyUserId, playlistId, resolvedTracks, createdAt));
     }
 
-    public Flux<CreatedPlaylistHistoryItem> getHistory() {
+    public Flux<CreatedPlaylistHistoryItem> getHistory(String spotifyUserId) {
         return databaseClient.sql("""
                         SELECT
                             id AS "id",
@@ -74,8 +79,10 @@ public class PlaylistHistoryService {
                             spotify_playlist_url AS "spotifyPlaylistUrl",
                             created_at AS "createdAt"
                         FROM created_playlists
+                        WHERE spotify_user_id = :spotifyUserId
                         ORDER BY created_at DESC
                         """)
+                .bind("spotifyUserId", spotifyUserId)
                 .map((row, metadata) -> new CreatedPlaylistHistoryItem(
                         row.get("id", String.class),
                         row.get("playlistName", String.class),
@@ -87,22 +94,26 @@ public class PlaylistHistoryService {
                 .all();
     }
 
-    public Flux<String> getUsedTrackKeys() {
+    public Flux<String> getUsedTrackKeys(String spotifyUserId) {
         return databaseClient.sql("""
                         SELECT normalized_key AS "normalizedKey"
-                        FROM used_tracks
+                        FROM user_used_tracks
+                        WHERE spotify_user_id = :spotifyUserId
                         """)
+                .bind("spotifyUserId", spotifyUserId)
                 .map((row, metadata) -> getString(row.get("normalizedKey")))
                 .all()
                 .filter(value -> value != null && !value.isBlank());
     }
 
-    public Mono<Void> clearHistory() {
-        return databaseClient.sql("DELETE FROM used_tracks")
+    public Mono<Void> clearHistory(String spotifyUserId) {
+        return databaseClient.sql("DELETE FROM user_used_tracks WHERE spotify_user_id = :spotifyUserId")
+                .bind("spotifyUserId", spotifyUserId)
                 .fetch()
                 .rowsUpdated()
                 .then(
-                        databaseClient.sql("DELETE FROM created_playlists")
+                        databaseClient.sql("DELETE FROM created_playlists WHERE spotify_user_id = :spotifyUserId")
+                                .bind("spotifyUserId", spotifyUserId)
                                 .fetch()
                                 .rowsUpdated()
                 )
@@ -110,6 +121,7 @@ public class PlaylistHistoryService {
     }
 
     private Mono<Void> saveUsedTracks(
+            String spotifyUserId,
             String playlistId,
             List<ResolvedPlaylistTrack> resolvedTracks,
             String createdAt
@@ -130,13 +142,14 @@ public class PlaylistHistoryService {
                     String artistName = resolvedTrack.weightedTrack().track().artistName();
                     String normalizedKey = trackKeyService.normalizedKey(artistName, trackName);
 
-                    if (normalizedKey == null || normalizedKey.isBlank()) {
+                    if (normalizedKey.isBlank()) {
                         return Mono.<Void>empty();
                     }
 
                     return databaseClient.sql("""
-                                    INSERT INTO used_tracks (
+                                    INSERT INTO user_used_tracks (
                                         id,
+                                        spotify_user_id,
                                         playlist_id,
                                         track_name,
                                         artist_name,
@@ -146,6 +159,7 @@ public class PlaylistHistoryService {
                                     )
                                     VALUES (
                                         :id,
+                                        :spotifyUserId,
                                         :playlistId,
                                         :trackName,
                                         :artistName,
@@ -153,28 +167,20 @@ public class PlaylistHistoryService {
                                         :spotifyUri,
                                         :createdAt
                                     )
-                                    ON CONFLICT (normalized_key) DO NOTHING
                                     """)
                             .bind("id", UUID.randomUUID().toString())
+                            .bind("spotifyUserId", spotifyUserId)
                             .bind("playlistId", safe(playlistId))
                             .bind("trackName", safe(trackName))
                             .bind("artistName", safe(artistName))
-                            .bind("normalizedKey", safe(normalizedKey))
+                            .bind("normalizedKey", normalizedKey)
                             .bind("spotifyUri", safe(resolvedTrack.spotifyUri()))
                             .bind("createdAt", safe(createdAt))
                             .fetch()
                             .rowsUpdated()
                             .then()
-                            .onErrorResume(error -> {
-                                System.out.println(
-                                        "Could not save used track"
-                                                + " | artist=" + safe(artistName)
-                                                + " | track=" + safe(trackName)
-                                                + " | error=" + error.getMessage()
-                                );
-
-                                return Mono.empty();
-                            });
+                            // A track this user has already used is the only expected failure.
+                            .onErrorResume(DataIntegrityViolationException.class, duplicate -> Mono.empty());
                 })
                 .then();
     }

@@ -1,12 +1,21 @@
+# Connect Spotify in the app first, then copy the "spotifyBotSession" value from the
+# browser's localStorage into sessionToken below.
+@sessionToken = paste-session-token-here
+
 POST http://localhost:8080/api/playlists/generate
 Content-Type: application/json
+Authorization: Bearer {{sessionToken}}
 
 {
   "seedArtist": "Daft Punk",
   "playlistName": "Robot Funk Mix",
   "playlistSize": 5,
   "restrictedArtists": ["Midnight Relay"],
-  "preferredArtists": ["Lunar Static", "Neon Atlas"],
+  "preferredArtists": ["Justice", "Kavinsky"],
   "preferredGenres": ["electronic", "funk", "dance"],
-  "randomness": 0.3
+  "randomness": 0.3,
+  "avoidUsedTracks": true,
+  "nicheArtistScale": 0,
+  "nicheSongScale": 0.5,
+  "similarityScale": 0.5
 }

@@ -1,50 +1,55 @@
 package spotifybot.service;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import spotifybot.model.SpotifyArtistSearchResult;
+import spotifybot.model.SpotifySession;
 import tools.jackson.databind.JsonNode;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
 @Service
 public class SpotifyArtistSearchService {
 
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+
     private final SpotifyAuthService spotifyAuthService;
     private final WebClient webClient;
 
-    public SpotifyArtistSearchService(SpotifyAuthService spotifyAuthService) {
+    public SpotifyArtistSearchService(
+            SpotifyAuthService spotifyAuthService,
+            @Value("${SPOTIFY_API_URL:https://api.spotify.com/v1}") String apiUrl
+    ) {
         this.spotifyAuthService = spotifyAuthService;
         this.webClient = WebClient.builder()
-                .baseUrl("https://api.spotify.com/v1")
+                .baseUrl(apiUrl)
                 .build();
     }
 
-    public Mono<List<SpotifyArtistSearchResult>> searchArtists(String query) {
+    public Mono<List<SpotifyArtistSearchResult>> searchArtists(SpotifySession session, String query) {
         if (query == null || query.isBlank()) {
             return Mono.just(List.of());
         }
 
-        return spotifyAuthService.getValidAccessToken()
+        return spotifyAuthService.getValidAccessToken(session)
                 .flatMap(accessToken ->
                         webClient.get()
                                 .uri(uriBuilder -> uriBuilder
                                         .path("/search")
-                                        .queryParam("q", query.trim())
+                                        .queryParam("q", "{query}")
                                         .queryParam("type", "artist")
                                         .queryParam("limit", 5)
-                                        .build())
+                                        .build(query.trim()))
                                 .headers(headers -> headers.setBearerAuth(accessToken))
                                 .retrieve()
                                 .bodyToMono(JsonNode.class)
+                                .timeout(REQUEST_TIMEOUT)
                                 .map(this::parseArtistResults)
-                )
-                .onErrorResume(error -> {
-                    System.out.println("Spotify artist search failed: " + error.getMessage());
-                    return Mono.just(List.of());
-                });
+                );
     }
 
     private List<SpotifyArtistSearchResult> parseArtistResults(JsonNode json) {

@@ -238,6 +238,94 @@ button.selected {
 .checkbox-row {
   display: flex;
   align-items: center;
+<<<<<<< HEAD
+=======
+  gap: 9px;
+  margin-top: 14px;
+  color: var(--muted-2);
+  font-size: 0.85rem;
+}
+
+.advanced-toggle {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.advanced-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.18);
+  animation: advanced-enter 0.3s ease;
+}
+
+.slider-field label > span {
+  color: var(--green-bright);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.final-actions .generate-button {
+  min-width: 220px;
+  flex: 1;
+}
+
+.error {
+  margin: 12px 0 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(239, 91, 91, 0.35);
+  border-radius: 12px;
+  color: #ffd1d1;
+  background: rgba(127, 29, 29, 0.3);
+}
+
+.notice {
+  margin: 12px 0 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 12px;
+  color: #fde9a8;
+  background: rgba(113, 83, 8, 0.3);
+}
+
+.disconnect-button {
+  margin-top: 10px;
+}
+
+.results-panel,
+.history-panel {
+  margin-top: 22px;
+  padding: 22px;
+}
+
+.results-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.results-header h2 {
+  font-size: clamp(1.4rem, 4vw, 2rem);
+}
+
+.results-header p:not(.eyebrow) {
+  margin: 7px 0 0;
+  color: var(--muted);
+}
+
+.results-actions,
+.track-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+>>>>>>> 0dd369d (bug fixes, backend improvements, database inconsistencies)
   gap: 8px;
 }
 

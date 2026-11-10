@@ -1,6 +1,8 @@
 package spotifybot.service;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import reactor.core.scheduler.Schedulers;
 import spotifybot.model.PlaylistGenerationRequest;
 import spotifybot.model.TrackCandidate;
 import spotifybot.model.WeightedTrack;
@@ -16,22 +18,37 @@ import java.util.List;
 @Service
 public class RankingDebugService {
 
-    private static final boolean ENABLED = true;
     private static final int MAX_ROWS = 5000;
 
     private static final Path DEBUG_FOLDER = Path.of("debug-rankings");
     private static final DateTimeFormatter FILE_TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
+    private final boolean enabled;
+
+    public RankingDebugService(@Value("${DEBUG_RANKINGS_ENABLED:false}") boolean enabled) {
+        this.enabled = enabled;
+    }
+
     public void writeCandidateRankingDebug(
             PlaylistGenerationRequest request,
             int round,
             List<WeightedTrack> rankedTracks
     ) {
-        if (!ENABLED) {
+        if (!enabled) {
             return;
         }
 
+        List<WeightedTrack> snapshot = List.copyOf(rankedTracks);
+
+        Schedulers.boundedElastic().schedule(() -> writeCandidateCsv(request, round, snapshot));
+    }
+
+    private void writeCandidateCsv(
+            PlaylistGenerationRequest request,
+            int round,
+            List<WeightedTrack> rankedTracks
+    ) {
         try {
             Files.createDirectories(DEBUG_FOLDER);
 
@@ -101,10 +118,20 @@ public class RankingDebugService {
             int round,
             List<WeightedTrack> selectedTracks
     ) {
-        if (!ENABLED) {
+        if (!enabled) {
             return;
         }
 
+        List<WeightedTrack> snapshot = List.copyOf(selectedTracks);
+
+        Schedulers.boundedElastic().schedule(() -> writeSelectedCsv(request, round, snapshot));
+    }
+
+    private void writeSelectedCsv(
+            PlaylistGenerationRequest request,
+            int round,
+            List<WeightedTrack> selectedTracks
+    ) {
         try {
             Files.createDirectories(DEBUG_FOLDER);
 

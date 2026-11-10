@@ -256,10 +256,14 @@ public class TrackScoringService {
 
         String artistName = normalize(track.artistName());
 
+        if (artistName.isBlank()) {
+            return false;
+        }
+
         return request.preferredArtists()
                 .stream()
-                .filter(artist -> artist != null && !artist.isBlank())
                 .map(this::normalize)
+                .filter(preferredArtist -> !preferredArtist.isBlank())
                 .anyMatch(preferredArtist ->
                         artistName.equals(preferredArtist)
                                 || artistName.contains(preferredArtist)
@@ -290,6 +294,10 @@ public class TrackScoringService {
 
             for (String trackGenre : track.genres()) {
                 String normalizedTrackGenre = normalize(trackGenre);
+
+                if (normalizedTrackGenre.isBlank()) {
+                    continue;
+                }
 
                 if (normalizedTrackGenre.equals(normalizedPreferredGenre)
                         || normalizedTrackGenre.contains(normalizedPreferredGenre)
@@ -436,13 +444,7 @@ public class TrackScoringService {
     }
 
     private String normalize(String value) {
-        if (value == null) {
-            return "";
-        }
-
-        return value.toLowerCase()
-                .replaceAll("[^a-z0-9]+", " ")
-                .trim();
+        return TrackText.simplify(value);
     }
 
     private double sliderDirectionFromNeutral(double value) {

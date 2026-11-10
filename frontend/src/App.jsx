@@ -21,6 +21,62 @@ function apiUrl(path) {
 
     return `${cleanBaseUrl}${cleanPath}`;
 }
+
+const SESSION_STORAGE_KEY = "spotifyBotSession";
+let sessionTokenInMemory = "";
+
+function readSessionToken() {
+    try {
+        return window.localStorage.getItem(SESSION_STORAGE_KEY) || sessionTokenInMemory;
+    } catch {
+        return sessionTokenInMemory;
+    }
+}
+
+function writeSessionToken(token) {
+    sessionTokenInMemory = token;
+
+    try {
+        if (token) {
+            window.localStorage.setItem(SESSION_STORAGE_KEY, token);
+        } else {
+            window.localStorage.removeItem(SESSION_STORAGE_KEY);
+        }
+    } catch {
+        // Storage can be blocked; the session then lasts until the page is closed.
+    }
+}
+
+// The backend redirects here after Spotify login with either #session=... or ?spotify=error.
+// Both are removed from the address bar straight away so the token is not left in history.
+function consumeSpotifyLoginRedirect() {
+    const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const query = new URLSearchParams(window.location.search);
+    const session = fragment.get("session");
+
+    if (session) {
+        writeSessionToken(session);
+    }
+
+    if (session || query.has("spotify")) {
+        window.history.replaceState(null, "", window.location.pathname);
+    }
+
+    return query.get("spotify") === "error"
+        ? query.get("message") || "Spotify connection failed. Please try again."
+        : "";
+}
+
+const initialLoginError = consumeSpotifyLoginRedirect();
+
+function createGenerationSeed() {
+    if (window.crypto?.randomUUID) {
+        return window.crypto.randomUUID();
+    }
+
+    return `${Date.now()}-${Math.random()}`;
+}
+
 function App() {
     const [seedArtist, setSeedArtist] = useState("Che");
     const [playlistName, setPlaylistName] = useState("CheRandomizer");
@@ -36,6 +92,12 @@ function App() {
     const [advancedOpen, setAdvancedOpen] = useState(false);
 
     const [spotifyConnected, setSpotifyConnected] = useState(false);
+<<<<<<< HEAD
+=======
+    const [loginError, setLoginError] = useState(initialLoginError);
+    const [wizardStage, setUiStage] = useState(2);
+    const uiStage = spotifyConnected ? wizardStage : 1;
+>>>>>>> 0dd369d (bug fixes, backend improvements, database inconsistencies)
 
     const [seedArtistOptions, setSeedArtistOptions] = useState([]);
     const [selectedSeedArtist, setSelectedSeedArtist] = useState(null);
@@ -45,6 +107,7 @@ function App() {
     const [playlist, setPlaylist] = useState(null);
     const [createdPlaylist, setCreatedPlaylist] = useState(null);
     const [playlistHistory, setPlaylistHistory] = useState([]);
+    const visibleHistory = spotifyConnected ? playlistHistory : [];
     const [lastGenerationRequest, setLastGenerationRequest] = useState(null);
 
     const [loading, setLoading] = useState(false);
@@ -54,6 +117,8 @@ function App() {
     const [error, setError] = useState("");
     const [createError, setCreateError] = useState("");
     const [replaceError, setReplaceError] = useState("");
+    const [historyError, setHistoryError] = useState("");
+    const [generationNotice, setGenerationNotice] = useState("");
 
     const hiddenNicheArtistScale = 0;
 
@@ -102,12 +167,23 @@ function App() {
             .filter((item) => item.length > 0);
     }
 
-    function createGenerationSeed() {
-        if (window.crypto?.randomUUID) {
-            return window.crypto.randomUUID();
+    async function apiFetch(path, options = {}) {
+        const token = readSessionToken();
+        const headers = { ...options.headers };
+
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
         }
 
-        return `${Date.now()}-${Math.random()}`;
+        const response = await fetch(apiUrl(path), { ...options, headers });
+
+        if (response.status === 401) {
+            writeSessionToken("");
+            setSpotifyConnected(false);
+            setLoginError("Your Spotify connection ended. Connect again to continue.");
+        }
+
+        return response;
     }
 
     function backendOfflineMessage() {
@@ -137,7 +213,7 @@ function App() {
             }
 
             return fallbackMessage;
-        } catch (err) {
+        } catch {
             return fallbackMessage;
         }
     }
@@ -241,21 +317,6 @@ function App() {
         return `https://open.spotify.com/track/${trackId}`;
     }
 
-    function trackIdentity(item) {
-        if (!item?.track) {
-            return "";
-        }
-
-        if (item.track.spotifyUri) {
-            return item.track.spotifyUri;
-        }
-
-        return `${item.track.artistName || ""}|${item.track.name || ""}`
-            .toLowerCase()
-            .replaceAll(/[^a-z0-9|]+/g, " ")
-            .trim();
-    }
-
     function buildGenerationRequest() {
         return {
             seedArtist,
@@ -294,25 +355,38 @@ function App() {
         setLastGenerationRequest(null);
     }
 
+    // A failed check says nothing about the connection, so it leaves the current state alone.
     async function checkSpotifyStatus() {
         try {
-            const response = await fetch(apiUrl("/api/spotify/status"));
+            const response = await apiFetch("/api/spotify/status");
 
             if (!response.ok) {
-                setSpotifyConnected(false);
                 return;
             }
 
             const data = await response.json();
+
+            if (!data.connected) {
+                writeSessionToken("");
+            }
+
             setSpotifyConnected(data.connected);
-        } catch (err) {
-            setSpotifyConnected(false);
+
+            if (data.connected) {
+                fetchPlaylistHistory();
+            }
+        } catch {
+            // The backend may be waking up; the next focus event checks again.
         }
     }
 
     async function fetchPlaylistHistory() {
+        if (!readSessionToken()) {
+            return;
+        }
+
         try {
-            const response = await fetch(apiUrl("/api/playlists/history"));
+            const response = await apiFetch("/api/playlists/history");
 
             if (!response.ok) {
                 return;
@@ -320,20 +394,32 @@ function App() {
 
             const data = await response.json();
             setPlaylistHistory(data);
+            setHistoryError("");
         } catch (err) {
-            setPlaylistHistory([]);
+            setHistoryError(messageFromError(err, "Could not load playlist history."));
         }
     }
 
     async function clearPlaylistHistory() {
+        if (!window.confirm("Clear your playlist history? Songs you have used could be picked again.")) {
+            return;
+        }
+
+        setHistoryError("");
+
         try {
-            await fetch(apiUrl("/api/playlists/history"), {
+            const response = await apiFetch("/api/playlists/history", {
                 method: "DELETE",
             });
 
+            if (!response.ok) {
+                const message = await readApiError(response, "Could not clear playlist history.");
+                throw new Error(message);
+            }
+
             setPlaylistHistory([]);
         } catch (err) {
-            // Keep quiet for now.
+            setHistoryError(messageFromError(err, "Could not clear playlist history."));
         }
     }
 
@@ -353,10 +439,8 @@ function App() {
         setSelectedSeedArtist(null);
 
         try {
-            const response = await fetch(
-                apiUrl(
-                    `/api/spotify/artists/search?query=${encodeURIComponent(seedArtist)}`
-                )
+            const response = await apiFetch(
+                `/api/spotify/artists/search?query=${encodeURIComponent(seedArtist)}`
             );
 
             if (!response.ok) {
@@ -378,26 +462,40 @@ function App() {
     }
 
     function connectSpotify() {
+        setLoginError("");
         window.location.href = apiUrl("/api/spotify/login");
     }
 
-    useEffect(() => {
-        checkSpotifyStatus();
-        fetchPlaylistHistory();
-
-        const intervalId = setInterval(checkSpotifyStatus, 3000);
-
-        function handleFocus() {
-            checkSpotifyStatus();
-            fetchPlaylistHistory();
+    async function disconnectSpotify() {
+        try {
+            await apiFetch("/api/spotify/logout", { method: "POST" });
+        } catch {
+            // Still sign out of this browser if the backend cannot be reached.
         }
 
+        writeSessionToken("");
+        setSpotifyConnected(false);
+        setPlaylistHistory([]);
+        clearPlaylist();
+        setSelectedSeedArtist(null);
+        setSeedArtistOptions([]);
+        setLastGenerationRequest(null);
+        setUiStage(2);
+    }
+
+    useEffect(() => {
+        function handleFocus() {
+            checkSpotifyStatus();
+        }
+
+        handleFocus();
         window.addEventListener("focus", handleFocus);
 
         return () => {
-            clearInterval(intervalId);
             window.removeEventListener("focus", handleFocus);
         };
+        // Runs once on mount; the check only reads storage and calls state setters.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     async function generatePlaylist(event) {
@@ -417,13 +515,14 @@ function App() {
         setError("");
         setCreateError("");
         setReplaceError("");
+        setGenerationNotice("");
         setPlaylist(null);
         setCreatedPlaylist(null);
 
         const requestBody = buildGenerationRequest();
 
         try {
-            const response = await fetch(apiUrl("/api/playlists/generate"), {
+            const response = await apiFetch("/api/playlists/generate", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -442,6 +541,10 @@ function App() {
 
             if (!data?.tracks || data.tracks.length === 0) {
                 setError("No Spotify-compatible tracks were found. Try a more popular preset or adjust advanced settings.");
+            } else if (data.tracks.length < requestBody.playlistSize) {
+                setGenerationNotice(
+                    `Found ${data.tracks.length} of the ${requestBody.playlistSize} tracks you asked for. A more popular preset usually finds more.`
+                );
             }
         } catch (err) {
             setError(messageFromError(err, "Could not generate playlist."));
@@ -469,21 +572,17 @@ function App() {
         setReplaceError("");
         setCreatedPlaylist(null);
 
-        const existingTrackIds = new Set(playlist.tracks.map(trackIdentity));
-
-        const replacementRequest = {
-            ...lastGenerationRequest,
-            playlistSize: Math.min(50, Math.max(playlist.tracks.length + 5, 10)),
-            generationSeed: createGenerationSeed(),
-        };
-
         try {
-            const response = await fetch(apiUrl("/api/playlists/generate"), {
+            const response = await apiFetch("/api/playlists/replace-track", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify(replacementRequest),
+                body: JSON.stringify({
+                    generationRequest: lastGenerationRequest,
+                    currentTracks: playlist.tracks,
+                    trackToReplace: playlist.tracks[indexToReplace],
+                }),
             });
 
             if (!response.ok) {
@@ -492,20 +591,9 @@ function App() {
             }
 
             const data = await response.json();
-            const candidates = Array.isArray(data.tracks) ? data.tracks : [];
-
-            const replacement = candidates.find(
-                (candidate) => !existingTrackIds.has(trackIdentity(candidate))
-            );
-
-            if (!replacement) {
-                throw new Error(
-                    "Could not find a fresh replacement. Try adjusting advanced settings or generating again."
-                );
-            }
 
             const updatedTracks = [...playlist.tracks];
-            updatedTracks[indexToReplace] = replacement;
+            updatedTracks[indexToReplace] = data.replacementTrack;
 
             setPlaylist({
                 ...playlist,
@@ -541,7 +629,7 @@ function App() {
         };
 
         try {
-            const response = await fetch(apiUrl("/api/playlists/create"), {
+            const response = await apiFetch("/api/playlists/create", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -595,6 +683,7 @@ function App() {
         setCreatedPlaylist(null);
         setCreateError("");
         setReplaceError("");
+        setGenerationNotice("");
     }
 
     return (
@@ -644,11 +733,28 @@ function App() {
                     >
                         {artistSearchLoading ? "Searching..." : "Find Matching Artists"}
                     </button>
+<<<<<<< HEAD
+=======
+
+                    {spotifyConnected && (
+                        <button
+                            type="button"
+                            className="button button-secondary small-button disconnect-button"
+                            onClick={disconnectSpotify}
+                        >
+                            Disconnect
+                        </button>
+                    )}
+
+                    {loginError && <p className="error">{loginError}</p>}
+                </section>
+>>>>>>> 0dd369d (bug fixes, backend improvements, database inconsistencies)
 
                     {artistSearchError && <p className="error">{artistSearchError}</p>}
 
                     {seedArtistOptions.length > 0 && (
                         <div>
+<<<<<<< HEAD
                             <p>Select the correct Spotify artist:</p>
                             {seedArtistOptions.map((artist) => (
                                 <button
@@ -660,6 +766,51 @@ function App() {
                                     {artist.name} — {formatNumber(artist.followers)} followers
                                 </button>
                             ))}
+=======
+                            <p className="eyebrow">GENERATED PLAYLIST</p>
+                            <h2>{playlist.playlistName}</h2>
+                            <p>
+                                {playlist.tracks.length} tracks · Seeded by {playlist.seedArtist}
+                            </p>
+                        </div>
+
+                        <div className="results-actions">
+                            <button
+                                type="button"
+                                className="button button-primary"
+                                onClick={createPlaylist}
+                                disabled={creating || playlist.tracks.length === 0 || !spotifyConnected}
+                            >
+                                {creating ? "Creating..." : "Create on Spotify"}
+                            </button>
+
+                            <button
+                                type="button"
+                                className="button button-secondary"
+                                onClick={clearPlaylist}
+                            >
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+
+                    {generationNotice && <p className="notice">{generationNotice}</p>}
+                    {createError && <p className="error">{createError}</p>}
+                    {replaceError && <p className="error">{replaceError}</p>}
+
+                    {createdPlaylist && (
+                        <div className="success">
+                            <strong>{createdPlaylist.status}</strong>
+                            <span>{createdPlaylist.playlistName}</span>
+                            <span>{createdPlaylist.trackCount} tracks added</span>
+                            <a
+                                href={createdPlaylist.spotifyPlaylistUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                            >
+                                Open Spotify Playlist ↗
+                            </a>
+>>>>>>> 0dd369d (bug fixes, backend improvements, database inconsistencies)
                         </div>
                     )}
 
@@ -885,6 +1036,7 @@ function App() {
 
             <hr />
 
+<<<<<<< HEAD
             <form>
                 <h2>Playlist History</h2>
                 <button type="button" onClick={fetchPlaylistHistory}>Refresh History</button>
@@ -895,6 +1047,35 @@ function App() {
                 ) : (
                     <ul>
                         {playlistHistory.map((item) => (
+=======
+                    <div className="results-actions">
+                        <button
+                            type="button"
+                            className="button button-secondary small-button"
+                            onClick={fetchPlaylistHistory}
+                        >
+                            Refresh
+                        </button>
+
+                        <button
+                            type="button"
+                            className="button button-danger small-button"
+                            onClick={clearPlaylistHistory}
+                            disabled={!spotifyConnected}
+                        >
+                            Clear History
+                        </button>
+                    </div>
+                </div>
+
+                {historyError && <p className="error">{historyError}</p>}
+
+                {visibleHistory.length === 0 ? (
+                    <p className="empty-state">No playlists created yet.</p>
+                ) : (
+                    <ul className="history-list">
+                        {visibleHistory.map((item) => (
+>>>>>>> 0dd369d (bug fixes, backend improvements, database inconsistencies)
                             <li key={item.id}>
                                 <strong>{item.playlistName}</strong>
                                 <p>Seed artist: {item.seedArtist || "Unknown"}</p>

@@ -1,5 +1,8 @@
 package spotifybot.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -14,9 +17,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class SpotifyTrackSearchService {
@@ -27,15 +28,26 @@ public class SpotifyTrackSearchService {
     private static final int MIN_ARTIST_MATCH_SCORE = 55;
     private static final int MIN_TOTAL_MATCH_SCORE = 115;
 
+    private static final int MAX_CACHE_ENTRIES = 20_000;
+    private static final Duration CACHE_LIFETIME = Duration.ofHours(24);
+
     private final WebClient webClient;
-    private final Map<String, String> uriCache = new ConcurrentHashMap<>();
-    private final Set<String> missCache = ConcurrentHashMap.newKeySet();
+    private final Cache<String, String> uriCache = Caffeine.newBuilder()
+            .maximumSize(MAX_CACHE_ENTRIES)
+            .expireAfterWrite(CACHE_LIFETIME)
+            .build();
+    private final Cache<String, Boolean> missCache = Caffeine.newBuilder()
+            .maximumSize(MAX_CACHE_ENTRIES)
+            .expireAfterWrite(CACHE_LIFETIME)
+            .build();
 
     private volatile long spotifyRateLimitedUntilMs = 0;
 
-    public SpotifyTrackSearchService() {
+    public SpotifyTrackSearchService(
+            @Value("${SPOTIFY_API_URL:https://api.spotify.com/v1}") String apiUrl
+    ) {
         this.webClient = WebClient.builder()
-                .baseUrl("https://api.spotify.com/v1")
+                .baseUrl(apiUrl)
                 .build();
     }
 
@@ -80,11 +92,13 @@ public class SpotifyTrackSearchService {
                 track.name()
         );
 
-        if (uriCache.containsKey(cacheKey)) {
-            return Mono.just(uriCache.get(cacheKey));
+        String cachedUri = uriCache.getIfPresent(cacheKey);
+
+        if (cachedUri != null) {
+            return Mono.just(cachedUri);
         }
 
-        if (missCache.contains(cacheKey)) {
+        if (missCache.getIfPresent(cacheKey) != null) {
             return Mono.empty();
         }
 
@@ -101,7 +115,7 @@ public class SpotifyTrackSearchService {
                     }
 
                     if (result.definitiveMiss()) {
-                        missCache.add(cacheKey);
+                        missCache.put(cacheKey, Boolean.TRUE);
                     }
 
                     System.out.println("Spotify could not resolve: " + track.artistName() + " - " + track.name());
@@ -115,8 +129,8 @@ public class SpotifyTrackSearchService {
             String trackName,
             String requiredSpotifyArtistId
     ) {
-        String cleanArtist = cleanSearchText(artistName);
-        String cleanTrack = cleanSearchText(trackName);
+        String cleanArtist = TrackText.simplify(artistName);
+        String cleanTrack = TrackText.searchTitle(artistName, trackName);
 
         if (cleanTrack.isBlank()) {
             return Mono.just(LookupResult.miss());
@@ -127,10 +141,10 @@ public class SpotifyTrackSearchService {
         return webClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/search")
-                        .queryParam("q", query)
+                        .queryParam("q", "{query}")
                         .queryParam("type", "track")
                         .queryParam("limit", 10)
-                        .build())
+                        .build(query))
                 .headers(headers -> headers.setBearerAuth(accessToken))
                 .retrieve()
                 .bodyToMono(JsonNode.class)
@@ -287,6 +301,20 @@ public class SpotifyTrackSearchService {
                 ));
             }
 
+            if (status == 401) {
+                return Mono.error(new ResponseStatusException(
+                        HttpStatus.UNAUTHORIZED,
+                        "Spotify rejected this connection. Connect Spotify and try again."
+                ));
+            }
+
+            if (status == 403) {
+                return Mono.error(new ResponseStatusException(
+                        HttpStatus.FORBIDDEN,
+                        "Spotify refused the search request for this account."
+                ));
+            }
+
             return Mono.just(LookupResult.unknown());
         }
 
@@ -317,7 +345,7 @@ public class SpotifyTrackSearchService {
     }
 
     private int scoreTrackName(String spotifyTrackName, String expectedTrack) {
-        String spotifyTrack = cleanSearchText(spotifyTrackName);
+        String spotifyTrack = TrackText.searchTitle(null, spotifyTrackName);
 
         if (spotifyTrack.isBlank() || expectedTrack.isBlank()) {
             return 0;
@@ -349,14 +377,14 @@ public class SpotifyTrackSearchService {
     }
 
     private int scoreArtistNames(List<String> spotifyArtists, String expectedArtist) {
-        String cleanExpectedArtist = cleanSearchText(expectedArtist);
+        String cleanExpectedArtist = TrackText.simplify(expectedArtist);
 
         if (cleanExpectedArtist.isBlank() || spotifyArtists == null || spotifyArtists.isEmpty()) {
             return 0;
         }
 
         List<String> cleanSpotifyArtists = spotifyArtists.stream()
-                .map(this::cleanSearchText)
+                .map(TrackText::simplify)
                 .filter(value -> !value.isBlank())
                 .toList();
 
@@ -437,7 +465,7 @@ public class SpotifyTrackSearchService {
     }
 
     private Set<String> meaningfulTokens(String value) {
-        String cleanValue = cleanSearchText(value);
+        String cleanValue = TrackText.simplify(value);
 
         if (cleanValue.isBlank()) {
             return Set.of();
@@ -447,7 +475,9 @@ public class SpotifyTrackSearchService {
         Set<String> result = new HashSet<>();
 
         for (String token : tokens) {
-            if (token.length() < 3) {
+            boolean shortLatinToken = token.length() < 3 && token.chars().allMatch(c -> c < 128);
+
+            if (shortLatinToken) {
                 continue;
             }
 
@@ -506,52 +536,9 @@ public class SpotifyTrackSearchService {
     ) {
         return requiredSpotifyArtistId
                 + "|"
-                + cleanSearchText(artistName)
+                + TrackText.simplify(artistName)
                 + "|"
-                + cleanSearchText(trackName);
-    }
-
-    private String cleanSearchText(String value) {
-        if (value == null) {
-            return "";
-        }
-
-        return value.toLowerCase()
-                .replaceAll("♱", " ")
-                .replaceAll("^[^-]{1,80}\\s+-\\s+", "")
-                .replaceAll("\\[explicit\\]", "")
-                .replaceAll("\\(explicit\\)", "")
-                .replaceAll("\\[clean\\]", "")
-                .replaceAll("\\(clean\\)", "")
-                .replaceAll("\\([^)]*feat\\.?[^)]*\\)", "")
-                .replaceAll("\\[[^]]*feat\\.?[^]]*]", "")
-                .replaceAll("\\([^)]*ft\\.?[^)]*\\)", "")
-                .replaceAll("\\[[^]]*ft\\.?[^]]*]", "")
-                .replaceAll("\\([^)]*with[^)]*\\)", "")
-                .replaceAll("\\[[^]]*with[^]]*]", "")
-                .replaceAll("\\([^)]*prod\\.?[^)]*\\)", "")
-                .replaceAll("\\[[^]]*prod\\.?[^]]*]", "")
-                .replaceAll("\\([^)]*remaster[^)]*\\)", "")
-                .replaceAll("\\[[^]]*remaster[^]]*]", "")
-                .replaceAll("\\([^)]*remix[^)]*\\)", "")
-                .replaceAll("\\[[^]]*remix[^]]*]", "")
-                .replaceAll("\\([^)]*version[^)]*\\)", "")
-                .replaceAll("\\[[^]]*version[^]]*]", "")
-                .replaceAll("\\([^)]*music video[^)]*\\)", "")
-                .replaceAll("\\[[^]]*music video[^]]*]", "")
-                .replaceAll("\\([^)]*mv[^)]*\\)", "")
-                .replaceAll("\\[[^]]*mv[^]]*]", "")
-                .replaceAll("\\([^)]*live[^)]*\\)", "")
-                .replaceAll("\\[[^]]*live[^]]*]", "")
-                .replaceAll("\\s+live\\s+complexcon\\s+\\d{4}.*$", "")
-                .replaceAll("\\s+complexcon\\s+\\d{4}.*$", "")
-                .replaceAll("^\\d+\\.\\s*", "")
-                .replaceAll("\\s+-\\s+explicit$", "")
-                .replaceAll("\\s+-\\s+clean$", "")
-                .replaceAll("\\s+mv$", "")
-                .replaceAll("\\s+music\\s+video$", "")
-                .replaceAll("[^a-z0-9]+", " ")
-                .trim();
+                + TrackText.searchTitle(artistName, trackName);
     }
 
     private record LookupResult(

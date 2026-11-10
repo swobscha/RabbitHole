@@ -74,11 +74,10 @@ public class SpotifyAuthService {
     public String buildAuthorizationUrl(String state) {
         ensureSpotifyConfigPresent();
 
+        // Only what the app uses: creating playlists. The account id from /me needs no scope.
         String scope = String.join(" ",
                 "playlist-modify-public",
-                "playlist-modify-private",
-                "user-read-private",
-                "user-read-email"
+                "playlist-modify-private"
         );
 
         return authorizeUrl
@@ -136,8 +135,13 @@ public class SpotifyAuthService {
         return session.refreshOnce(() -> refreshAccessToken(session));
     }
 
-    public Mono<Void> logout(String authorizationHeader) {
-        return findSession(authorizationHeader).flatMap(this::endSession);
+    /** Ends every session this Spotify account has, on all devices. */
+    public Mono<Void> disconnectAccount(SpotifySession session) {
+        String spotifyUserId = session.spotifyUserId();
+
+        activeSessions.asMap().values().removeIf(cached -> cached.spotifyUserId().equals(spotifyUserId));
+
+        return sessionStore.deleteAllForUser(spotifyUserId);
     }
 
     public boolean isConfigured() {

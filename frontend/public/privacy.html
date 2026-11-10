@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Privacy Policy · MusicFinder</title>
+    <style>
+      :root {
+        --bg: #0c1c10;
+        --text: #f5fff5;
+        --muted: #c7d7c9;
+        --green: #3ee06f;
+        --border: rgba(255, 255, 255, 0.12);
+      }
+
+      body {
+        margin: 0;
+        color: var(--text);
+        background: var(--bg);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+
+      main {
+        width: min(760px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 40px 0 72px;
+      }
+
+      h1 {
+        margin: 0 0 4px;
+        font-size: clamp(2rem, 6vw, 3rem);
+        letter-spacing: -0.03em;
+      }
+
+      h2 {
+        margin: 32px 0 8px;
+        font-size: 1.2rem;
+      }
+
+      p,
+      li {
+        color: var(--muted);
+      }
+
+      a {
+        color: var(--green);
+      }
+
+      .updated {
+        margin: 0 0 24px;
+        font-size: 0.85rem;
+      }
+
+      .placeholder {
+        padding: 1px 6px;
+        border: 1px dashed var(--green);
+        border-radius: 6px;
+        color: var(--text);
+      }
+
+      footer {
+        margin-top: 40px;
+        padding-top: 16px;
+        border-top: 1px solid var(--border);
+        font-size: 0.85rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Privacy Policy</h1>
+      <p class="updated">Last updated: November 9, 2026</p>
+
+      <p>
+        MusicFinder builds Spotify playlists of new music based on an artist you choose. This page explains
+        what information MusicFinder uses, why, and how you can delete it. MusicFinder is not affiliated with
+        or endorsed by Spotify or Last.fm.
+      </p>
+
+      <h2>What MusicFinder gets from Spotify</h2>
+      <ul>
+        <li>
+          <strong>Your Spotify account ID.</strong> This is used to keep your history separate from other
+          people's. MusicFinder does not ask for your email address or other profile details.
+        </li>
+        <li>
+          <strong>Permission to create playlists.</strong> MusicFinder only creates a playlist when you click
+          "Create on Spotify". Playlists are created as private. MusicFinder cannot read your listening history.
+        </li>
+        <li>
+          <strong>A Spotify login token</strong> that keeps you connected. It is stored encrypted, and the key
+          that unlocks it is never stored on the server.
+        </li>
+      </ul>
+
+      <h2>What MusicFinder stores</h2>
+      <ul>
+        <li>
+          For each playlist you create: its name, the seed artist, the number of tracks, its Spotify link, and
+          when it was created. This is the history you see on the page.
+        </li>
+        <li>
+          The songs used in those playlists (song name, artist name, and Spotify link), so later playlists can
+          avoid repeating them.
+        </li>
+        <li>
+          In your browser: a session token in local storage that keeps you signed in on that device.
+        </li>
+        <li>
+          Server logs, which can include your IP address, your Spotify account ID, and the artists you search
+          for. These are used to run the service, prevent abuse, and fix problems.
+        </li>
+      </ul>
+
+      <h2>Services MusicFinder uses</h2>
+      <ul>
+        <li><strong>Spotify</strong>, to sign you in, search for music, and create playlists on your account.</li>
+        <li>
+          <strong>Last.fm</strong>, to find similar artists and popular songs. Only artist and song names are sent
+          to Last.fm, never your identity.
+        </li>
+        <li>
+          <strong>Hosting and database providers</strong>, which store the information above:
+          <span class="placeholder">add your hosting and database providers</span>.
+        </li>
+      </ul>
+      <p>MusicFinder does not sell your information, show ads, or email you.</p>
+
+      <h2>How long information is kept</h2>
+      <ul>
+        <li>Your playlist history and used songs are kept until you clear them or disconnect.</li>
+        <li>Login sessions are deleted when you disconnect, or after 30 days without use.</li>
+      </ul>
+
+      <h2>Your choices</h2>
+      <ul>
+        <li><strong>Clear History</strong> deletes your playlist history and the list of used songs.</li>
+        <li>
+          <strong>Disconnect</strong> deletes your history and used songs and signs you out on every device.
+        </li>
+        <li>
+          You can also remove MusicFinder's access from your
+          <a href="https://www.spotify.com/account/apps/" target="_blank" rel="noreferrer">Spotify account page</a>.
+          If you do that without disconnecting first, contact us below to have your data deleted.
+        </li>
+        <li>Playlists already created on your Spotify account stay there until you delete them in Spotify.</li>
+      </ul>
+
+      <h2>Children</h2>
+      <p>MusicFinder is not intended for children under 13.</p>
+
+      <h2>Changes</h2>
+      <p>If this policy changes, the date at the top of this page will be updated.</p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions or deletion requests: <span class="placeholder">add your contact email</span>
+      </p>
+
+      <footer>
+        <a href="/">Back to MusicFinder</a>
+      </footer>
+    </main>
+  </body>
+</html>

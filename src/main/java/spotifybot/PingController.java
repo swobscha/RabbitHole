@@ -9,6 +9,6 @@ public class PingController {
 
     @GetMapping("/ping")
     public Mono<String> ping() {
-        return Mono.just("Spotify bot backend is running");
+        return Mono.just("MusicFinder backend is running");
     }
 }

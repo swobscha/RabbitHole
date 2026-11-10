@@ -115,29 +115,6 @@ button {
   letter-spacing: 0.18em;
 }
 
-.backend-badge {
-  max-width: 360px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 11px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted);
-  background: rgba(0, 0, 0, 0.2);
-  font-size: 0.72rem;
-  overflow-wrap: anywhere;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--green-bright);
-  box-shadow: 0 0 12px rgba(62, 224, 111, 0.72);
-}
-
 .wizard,
 .wizard-form {
   display: flex;
@@ -517,7 +494,20 @@ input[type="range"]:hover::-moz-range-thumb {
   gap: 10px;
 }
 
+.artist-choice {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.artist-spotify-link {
+  font-size: 0.72rem;
+}
+
 .artist-option {
+  width: 100%;
   min-width: 0;
   min-height: 174px;
   display: flex;
@@ -745,6 +735,28 @@ input[type="range"]:hover::-moz-range-thumb {
 
 .disconnect-button {
   margin-top: 10px;
+}
+
+.selected-artist-summary .text-link {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.75rem;
+}
+
+.app-footer {
+  margin-top: 28px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.app-footer p {
+  margin: 0;
+}
+
+.app-footer a {
+  color: var(--green-bright);
 }
 
 .results-panel,

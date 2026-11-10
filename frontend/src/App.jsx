@@ -74,8 +74,8 @@ function createGenerationSeed() {
 }
 
 function App() {
-    const [seedArtist, setSeedArtist] = useState("Che");
-    const [playlistName, setPlaylistName] = useState("CheRandomizer");
+    const [seedArtist, setSeedArtist] = useState("");
+    const [playlistName, setPlaylistName] = useState("MusicFinder Mix");
     const [playlistSize, setPlaylistSize] = useState(20);
     const [restrictedArtists, setRestrictedArtists] = useState("");
     const [preferredArtists, setPreferredArtists] = useState("");
@@ -180,7 +180,7 @@ function App() {
     }
 
     function backendOfflineMessage() {
-        return `Could not reach the backend at ${API_BASE_URL}. Please try again in a moment.`;
+        return "Could not reach the MusicFinder server. Please try again in a moment.";
     }
 
     async function readApiError(response, fallbackMessage) {
@@ -308,6 +308,17 @@ function App() {
         }
 
         return `https://open.spotify.com/track/${trackId}`;
+    }
+
+    // Last.fm's terms ask for its data to link back to the matching catalogue page.
+    function lastFmTrackUrl(track) {
+        if (!track?.artistName || !track?.name) {
+            return "";
+        }
+
+        const part = (value) => encodeURIComponent(value).replace(/%20/g, "+");
+
+        return `https://www.last.fm/music/${part(track.artistName)}/_/${part(track.name)}`;
     }
 
     function buildGenerationRequest() {
@@ -465,10 +476,25 @@ function App() {
     }
 
     async function disconnectSpotify() {
+        const confirmed = window.confirm(
+            "Disconnect Spotify? This also deletes your MusicFinder playlist history. Playlists already on Spotify are not affected."
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
         try {
-            await apiFetch("/api/spotify/logout", { method: "POST" });
-        } catch {
-            // Still sign out of this browser if the backend cannot be reached.
+            const response = await apiFetch("/api/spotify/logout", { method: "POST" });
+
+            if (!response.ok && response.status !== 401) {
+                const message = await readApiError(response, "Could not disconnect Spotify.");
+                setLoginError(`${message} Your data was not deleted; try again.`);
+                return;
+            }
+        } catch (err) {
+            setLoginError(`${messageFromError(err, "Could not disconnect Spotify.")} Your data was not deleted; try again.`);
+            return;
         }
 
         writeSessionToken("");
@@ -713,15 +739,10 @@ function App() {
             <header className="app-header">
                 <div>
                     <p className="eyebrow">DISCOVERY ENGINE</p>
-                    <h1>Spotify Bot</h1>
+                    <h1>MusicFinder</h1>
                     <p className="header-copy">
                         Build a playlist one decision at a time.
                     </p>
-                </div>
-
-                <div className="backend-badge">
-                    <span className="status-dot" />
-                    <span>{API_BASE_URL}</span>
                 </div>
             </header>
 
@@ -847,8 +868,8 @@ function App() {
 
                                 <div className="artist-options">
                                     {seedArtistOptions.slice(0, 5).map((artist) => (
+                                        <div key={artist.id} className="artist-choice">
                                         <button
-                                            key={artist.id}
                                             type="button"
                                             className={`artist-option ${
                                                 selectedSeedArtist?.id === artist.id ? "selected" : ""
@@ -878,6 +899,18 @@ function App() {
                                                 </span>
                                             )}
                                         </button>
+
+                                        {artist.spotifyUrl && (
+                                            <a
+                                                className="text-link artist-spotify-link"
+                                                href={artist.spotifyUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                            >
+                                                View on Spotify ↗
+                                            </a>
+                                        )}
+                                        </div>
                                     ))}
                                 </div>
 
@@ -938,6 +971,16 @@ function App() {
                                         <div>
                                             <small>Seed artist</small>
                                             <strong>{selectedSeedArtist.name}</strong>
+                                            {selectedSeedArtist.spotifyUrl && (
+                                                <a
+                                                    className="text-link"
+                                                    href={selectedSeedArtist.spotifyUrl}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                >
+                                                    View on Spotify ↗
+                                                </a>
+                                            )}
                                         </div>
                                     </div>
                                 )}
@@ -1261,6 +1304,17 @@ function App() {
                                             </a>
                                         )}
 
+                                        {lastFmTrackUrl(item.track) && (
+                                            <a
+                                                className="text-link"
+                                                href={lastFmTrackUrl(item.track)}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                            >
+                                                Last.fm ↗
+                                            </a>
+                                        )}
+
                                         <button
                                             type="button"
                                             className="button button-secondary small-button"
@@ -1349,6 +1403,20 @@ function App() {
                     </ul>
                 )}
             </section>
+
+            <footer className="app-footer">
+                <p>
+                    Playlists and music data from{" "}
+                    <a href="https://www.spotify.com" target="_blank" rel="noreferrer">Spotify</a>.
+                    Listening stats powered by AudioScrobbler from{" "}
+                    <a href="https://www.last.fm" target="_blank" rel="noreferrer">Last.fm</a>.
+                </p>
+                <p>
+                    <a href="/privacy.html">Privacy policy</a>
+                    {" · "}
+                    MusicFinder is not affiliated with or endorsed by Spotify or Last.fm.
+                </p>
+            </footer>
         </main>
     );
 }

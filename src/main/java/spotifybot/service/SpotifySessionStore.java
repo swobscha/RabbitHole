@@ -104,6 +104,14 @@ public class SpotifySessionStore {
                 .then();
     }
 
+    public Mono<Void> deleteAllForUser(String spotifyUserId) {
+        return databaseClient.sql("DELETE FROM spotify_sessions WHERE spotify_user_id = :spotifyUserId")
+                .bind("spotifyUserId", spotifyUserId)
+                .fetch()
+                .rowsUpdated()
+                .then();
+    }
+
     public Mono<Void> deleteIdleSince(long cutoffMs) {
         return databaseClient.sql("DELETE FROM spotify_sessions WHERE last_used_at < :cutoff")
                 .bind("cutoff", cutoffMs)

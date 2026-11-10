@@ -22,6 +22,8 @@ import spotifybot.service.SpotifySessionStore;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -446,18 +448,53 @@ class ApiFlowIntegrationTest {
     }
 
     @Test
-    void logoutEndsTheSession() {
-        String token = login(uniqueCode());
+    void disconnectDeletesTheAccountsDataAndEndsAllItsSessions() {
+        String code = uniqueCode();
+        String seed = "Disconnect " + uniqueCode();
+        String phone = login(code);
+        String laptop = login(code);
+        String other = login(uniqueCode());
 
-        assertTrue(connected(token));
+        create(phone, seed, generate(phone, seed, 2).tracks()).expectStatus().isOk();
+        create(other, seed, generate(other, seed, 2).tracks()).expectStatus().isOk();
+
+        assertTrue(connected(laptop));
+        assertEquals(2L, usedTrackCount("user-" + code));
 
         client().post().uri("/api/spotify/logout")
-                .headers(headers -> headers.setBearerAuth(token))
+                .headers(headers -> headers.setBearerAuth(phone))
                 .exchange()
                 .expectStatus().isOk();
 
-        assertFalse(connected(token));
-        assertNull(sessionStore.load(token).block());
+        assertFalse(connected(phone));
+        assertFalse(connected(laptop));
+        assertNull(sessionStore.load(laptop).block());
+        assertEquals(0L, usedTrackCount("user-" + code));
+        assertTrue(history(login(code)).isEmpty());
+        assertEquals(1, history(other).size());
+    }
+
+    @Test
+    void loginAsksOnlyForPlaylistPermissions() {
+        String scope = UriComponentsBuilder.fromUri(startLogin().getResponseHeaders().getLocation())
+                .build()
+                .getQueryParams()
+                .getFirst("scope");
+
+        assertEquals(
+                "playlist-modify-public playlist-modify-private",
+                URLDecoder.decode(scope, StandardCharsets.UTF_8)
+        );
+    }
+
+    private long usedTrackCount(String spotifyUserId) {
+        Long count = databaseClient.sql("SELECT COUNT(*) AS \"total\" FROM user_used_tracks WHERE spotify_user_id = :id")
+                .bind("id", spotifyUserId)
+                .map((row, metadata) -> row.get("total", Long.class))
+                .one()
+                .block();
+
+        return count == null ? 0L : count;
     }
 
     @Test

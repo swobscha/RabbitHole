@@ -1,6 +1,5 @@
 package spotifybot.controller;
 
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -13,7 +12,6 @@ import spotifybot.service.PlaylistGenerationService;
 
 @RestController
 @RequestMapping("/api/playlists")
-@CrossOrigin(origins = "http://localhost:5173")
 public class PlaylistReplacementController {
 
     private final PlaylistGenerationService playlistGenerationService;

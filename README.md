@@ -1,5 +1,7 @@
 # MusicFinder
 
+[![CI](https://github.com/swobscha/spotify-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/swobscha/spotify-bot/actions/workflows/ci.yml)
+
 MusicFinder builds Spotify playlists of new music from an artist you choose. You pick a seed artist, choose how
 popular or obscure and how similar or different the songs should be, and MusicFinder finds matching tracks and
 creates the playlist on your Spotify account.
@@ -92,6 +94,8 @@ npm run lint
 npm run build
 ```
 
+GitHub Actions runs both on every push and pull request (`.github/workflows/ci.yml`).
+
 ## Configuration
 
 All settings are environment variables, or entries in `.env.local` for local development.
@@ -109,15 +113,23 @@ All settings are environment variables, or entries in `.env.local` for local dev
 | `SPRING_R2DBC_PASSWORD` | Database password | empty |
 | `RATE_LIMIT_TRUSTED_PROXY_HOPS` | Number of reverse proxies in front of the app; `0` ignores `X-Forwarded-For` | `0` |
 | `DEBUG_RANKINGS_ENABLED` | Writes ranking CSV files to `debug-rankings/` | `false` |
+| `SENTRY_DSN` | Turns on error alerts through [Sentry](https://sentry.io) | empty (off) |
+| `LOGGING_LEVEL_SPOTIFYBOT` | Log detail; `DEBUG` shows every Spotify match decision | `INFO` |
 | `VITE_API_BASE_URL` | Frontend only: backend URL used by the built frontend | `http://localhost:8080` when run locally |
 
 The database tables are created or updated automatically at startup from `src/main/resources/schema.sql`.
 Idle database connections close after 2 minutes so a scale-to-zero database can sleep.
 
+### Logs and error alerts
+
+The backend writes logs to the console, which your host keeps. Each generation logs one line when it starts and one
+when it finishes. To get alerts, create a free Sentry project and set `SENTRY_DSN`: Sentry then emails you when an
+unexpected error happens. IP addresses and request headers are not sent to Sentry.
+
 ## Deployment
 
-The `Dockerfile` builds the backend and starts it on the port in the `PORT` environment variable (default `10000`).
-Set the variables from the table above on your host. In production:
+The `Dockerfile` builds the backend and starts it, as an unprivileged user, on the port in the `PORT` environment
+variable (default `10000`). Set the variables from the table above on your host. In production:
 
 - Set `SPOTIFY_REDIRECT_URI` to `https://<your-backend-host>/api/spotify/callback` and add the same URI in the
   Spotify dashboard.
@@ -151,9 +163,13 @@ Spotify login and keeps it in the browser's local storage. `test-generate.http` 
 
 ## Privacy and data
 
-Each Spotify account's history is kept separately. Spotify refresh tokens are stored encrypted with a key derived
-from the browser's session token, which is never stored on the server. **Disconnect** deletes the account's history
-and signs it out on every device. The privacy policy is at `frontend/public/privacy.html`.
+Each Spotify account's history is kept separately, keyed by Spotify's stable `account_id`. Data saved under the
+older Spotify user id is moved to the `account_id` the next time that person logs in. Spotify refresh tokens are
+stored encrypted with a key derived from the browser's session token, which is never stored on the server.
+
+**Disconnect** deletes the account's history and signs it out on every device. If someone removes MusicFinder in
+their Spotify account settings instead, their data is deleted the next time MusicFinder tries to use that access.
+The privacy policy is at `frontend/public/privacy.html`.
 
 ## Limits
 

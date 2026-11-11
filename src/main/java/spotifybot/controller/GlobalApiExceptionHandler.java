@@ -1,5 +1,8 @@
 package spotifybot.controller;
 
+import io.sentry.Sentry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +21,8 @@ import java.util.concurrent.TimeoutException;
 
 @RestControllerAdvice
 public class GlobalApiExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalApiExceptionHandler.class);
 
     @ExceptionHandler(ResponseStatusException.class)
     public Mono<ResponseEntity<ApiErrorResponse>> handleResponseStatusException(
@@ -104,14 +109,16 @@ public class GlobalApiExceptionHandler {
     ) {
         HttpStatus status = HttpStatus.INTERNAL_SERVER_ERROR;
 
-        System.out.println("Unhandled backend error: " + error.getMessage());
-        error.printStackTrace();
+        log.error("Unhandled error on {}", exchange.getRequest().getPath().value(), error);
+
+        // Handled here, so Sentry would not see it otherwise. Does nothing unless SENTRY_DSN is set.
+        Sentry.captureException(error);
 
         return Mono.just(ResponseEntity
                 .status(status)
                 .body(buildError(
                         status,
-                        "Something went wrong on the backend. Check the Spring Boot console for details.",
+                        "Something went wrong on our side. Please try again.",
                         exchange
                 )));
     }

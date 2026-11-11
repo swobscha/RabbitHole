@@ -1,5 +1,7 @@
 package spotifybot.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
@@ -24,6 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 @Order(-100)
 public class ApiRateLimitFilter implements WebFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(ApiRateLimitFilter.class);
 
     private static final long WINDOW_MS = 60_000L;
     private static final long CLEANUP_INTERVAL_MS = 60_000L;
@@ -83,12 +87,12 @@ public class ApiRateLimitFilter implements WebFilter {
 
         long retryAfterSeconds = counter.retryAfterSeconds(WINDOW_MS);
 
-        System.out.println(
-                "RATE LIMIT BLOCKED"
-                        + " | route=" + routeLimit.name()
-                        + " | client=" + client
-                        + " | maxRequestsPerMinute=" + routeLimit.maxRequests()
-                        + " | retryAfterSeconds=" + retryAfterSeconds
+        log.warn(
+                "Rate limit reached | route={} | client={} | maxRequestsPerMinute={} | retryAfterSeconds={}",
+                routeLimit.name(),
+                client,
+                routeLimit.maxRequests(),
+                retryAfterSeconds
         );
 
         return writeRateLimitResponse(exchange, routeLimit, retryAfterSeconds);

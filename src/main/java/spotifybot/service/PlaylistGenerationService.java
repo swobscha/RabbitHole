@@ -1,5 +1,7 @@
 package spotifybot.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -26,6 +28,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class PlaylistGenerationService {
+
+    private static final Logger log = LoggerFactory.getLogger(PlaylistGenerationService.class);
 
     private static final int DISCOVERY_BATCH_SIZE = 100;
     private static final int MAX_DISCOVERY_ROUNDS = 20;
@@ -75,15 +79,14 @@ public class PlaylistGenerationService {
         int playlistSize = request.playlistSize();
         int lookupAttempts = lookupAttemptsFor(playlistSize);
 
-        System.out.println(
-                "GENERATION START"
-                        + " | playlistName=" + request.playlistName()
-                        + " | seedArtist=" + request.seedArtist()
-                        + " | requestedSize=" + playlistSize
-                        + " | maxSpotifyLookupAttempts=" + lookupAttempts
-                        + " | popularityScale=" + request.nicheSongScale()
-                        + " | similarityScale=" + request.safeSimilarityScale()
-                        + " | avoidUsedTracks=" + request.avoidUsedTracks()
+        log.info(
+                "Generation started | seedArtist={} | requestedSize={} | maxSpotifyLookups={} | popularity={} | similarity={} | avoidUsedTracks={}",
+                request.seedArtist(),
+                playlistSize,
+                lookupAttempts,
+                request.nicheSongScale(),
+                request.safeSimilarityScale(),
+                request.avoidUsedTracks()
         );
 
         return spotifyAuthService.getValidAccessToken(session)
@@ -136,10 +139,10 @@ public class PlaylistGenerationService {
                 original.safeDiscoveryLimit()
         );
 
-        System.out.println(
-                "REPLACE TRACK START"
-                        + " | seedArtist=" + original.seedArtist()
-                        + " | currentTracks=" + request.safeCurrentTracks().size()
+        log.info(
+                "Replacement started | seedArtist={} | currentTracks={}",
+                original.seedArtist(),
+                request.safeCurrentTracks().size()
         );
 
         ValidationState state = new ValidationState(
@@ -169,11 +172,11 @@ public class PlaylistGenerationService {
                                 "Could not find a fresh replacement track. Try changing advanced settings or generating again."
                         ))
                 )
-                .doOnNext(replacement -> System.out.println(
-                        "REPLACE TRACK FOUND"
-                                + " | artist=" + replacement.track().artistName()
-                                + " | track=" + replacement.track().name()
-                                + " | spotifyUri=" + replacement.track().spotifyUri()
+                .doOnNext(replacement -> log.info(
+                        "Replacement found | artist={} | track={} | spotifyUri={}",
+                        replacement.track().artistName(),
+                        replacement.track().name(),
+                        replacement.track().spotifyUri()
                 ));
     }
 
@@ -279,13 +282,14 @@ public class PlaylistGenerationService {
                             .sorted(Comparator.comparingDouble(WeightedTrack::score).reversed())
                             .toList();
 
-                    System.out.println(
-                            "ROUND " + round
-                                    + " | Last.fm scored candidates=" + sortedTracks.size()
-                                    + " | selectedSoFar=" + state.selectedTracks.size()
-                                    + " | SpotifyAttemptsMade=" + state.spotifyAttemptsMade()
-                                    + " | SpotifyAttemptsLeft=" + state.attemptsRemaining
-                                    + " | discoveryLimit=" + request.safeDiscoveryLimit()
+                    log.debug(
+                            "Round {} | scoredCandidates={} | selectedSoFar={} | spotifyLookupsMade={} | spotifyLookupsLeft={} | discoveryLimit={}",
+                            round,
+                            sortedTracks.size(),
+                            state.selectedTracks.size(),
+                            state.spotifyAttemptsMade(),
+                            state.attemptsRemaining,
+                            request.safeDiscoveryLimit()
                     );
 
                     rankingDebugService.writeCandidateRankingDebug(
@@ -321,11 +325,7 @@ public class PlaylistGenerationService {
         state.candidatePoolGrew = uniqueSortedTracks.size() > state.lastCandidatePoolSize;
         state.lastCandidatePoolSize = uniqueSortedTracks.size();
 
-        System.out.println(
-                "ROUND " + round
-                        + " | unique Spotify candidates after cleanup="
-                        + uniqueSortedTracks.size()
-        );
+        log.debug("Round {} | uniqueCandidates={}", round, uniqueSortedTracks.size());
 
         return Flux.fromIterable(uniqueSortedTracks)
                 .concatMap(weightedTrack -> {
@@ -387,16 +387,16 @@ public class PlaylistGenerationService {
                             .then();
                 })
                 .then(Mono.fromSupplier(() -> {
-                    System.out.println(
-                            "ROUND " + round
-                                    + " COMPLETE"
-                                    + " | Spotify-valid selected=" + state.selectedTracks.size()
-                                    + " | attemptsMade=" + state.spotifyAttemptsMade()
-                                    + " | attemptsLeft=" + state.attemptsRemaining
-                                    + " | resolved=" + state.spotifyResolved
-                                    + " | misses=" + state.spotifyMissed
-                                    + " | duplicateSpotifyUris=" + state.duplicateSpotifyUriResults
-                                    + " | artistCapSkips=" + state.artistCapSkips
+                    log.debug(
+                            "Round {} complete | selected={} | lookupsMade={} | lookupsLeft={} | resolved={} | misses={} | duplicateSpotifyUris={} | artistCapSkips={}",
+                            round,
+                            state.selectedTracks.size(),
+                            state.spotifyAttemptsMade(),
+                            state.attemptsRemaining,
+                            state.spotifyResolved,
+                            state.spotifyMissed,
+                            state.duplicateSpotifyUriResults,
+                            state.artistCapSkips
                     );
 
                     rankingDebugService.writeSelectedRankingDebug(
@@ -586,23 +586,22 @@ public class PlaylistGenerationService {
     ) {
         long elapsedMs = System.currentTimeMillis() - state.startedAtMs;
 
-        System.out.println(
-                "GENERATION SUMMARY"
-                        + " | stopReason=" + stopReason
-                        + " | playlistName=" + request.playlistName()
-                        + " | seedArtist=" + request.seedArtist()
-                        + " | requestedSize=" + state.targetSize
-                        + " | returnedTracks=" + result.tracks().size()
-                        + " | rounds=" + finalRound
-                        + " | maxSpotifyLookupAttempts=" + state.initialAttempts
-                        + " | attemptsMade=" + state.spotifyAttemptsMade()
-                        + " | attemptsLeft=" + state.attemptsRemaining
-                        + " | resolved=" + state.spotifyResolved
-                        + " | misses=" + state.spotifyMissed
-                        + " | duplicateSpotifyUris=" + state.duplicateSpotifyUriResults
-                        + " | duplicateCandidateSkips=" + state.duplicateCandidateSkips
-                        + " | artistCapSkips=" + state.artistCapSkips
-                        + " | elapsedMs=" + elapsedMs
+        log.info(
+                "Generation finished | stopReason={} | seedArtist={} | requestedSize={} | returnedTracks={} | rounds={} "
+                        + "| lookupsMade={} | resolved={} | misses={} | duplicateSpotifyUris={} | duplicateCandidateSkips={} "
+                        + "| artistCapSkips={} | elapsedMs={}",
+                stopReason,
+                request.seedArtist(),
+                state.targetSize,
+                result.tracks().size(),
+                finalRound,
+                state.spotifyAttemptsMade(),
+                state.spotifyResolved,
+                state.spotifyMissed,
+                state.duplicateSpotifyUriResults,
+                state.duplicateCandidateSkips,
+                state.artistCapSkips,
+                elapsedMs
         );
     }
 
@@ -614,21 +613,15 @@ public class PlaylistGenerationService {
     ) {
         long elapsedMs = System.currentTimeMillis() - state.startedAtMs;
 
-        System.out.println(
-                "GENERATION ERROR SUMMARY"
-                        + " | playlistName=" + request.playlistName()
-                        + " | seedArtist=" + request.seedArtist()
-                        + " | round=" + round
-                        + " | maxSpotifyLookupAttempts=" + state.initialAttempts
-                        + " | attemptsMade=" + state.spotifyAttemptsMade()
-                        + " | attemptsLeft=" + state.attemptsRemaining
-                        + " | resolved=" + state.spotifyResolved
-                        + " | misses=" + state.spotifyMissed
-                        + " | duplicateSpotifyUris=" + state.duplicateSpotifyUriResults
-                        + " | duplicateCandidateSkips=" + state.duplicateCandidateSkips
-                        + " | artistCapSkips=" + state.artistCapSkips
-                        + " | elapsedMs=" + elapsedMs
-                        + " | error=" + error.getMessage()
+        log.warn(
+                "Generation failed | seedArtist={} | round={} | lookupsMade={} | resolved={} | misses={} | elapsedMs={} | error={}",
+                request.seedArtist(),
+                round,
+                state.spotifyAttemptsMade(),
+                state.spotifyResolved,
+                state.spotifyMissed,
+                elapsedMs,
+                error.getMessage()
         );
     }
 

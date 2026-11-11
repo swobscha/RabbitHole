@@ -120,6 +120,33 @@ public class PlaylistHistoryService {
                 .then();
     }
 
+    /** Re-keys history saved under an old Spotify user id to the account's stable account_id. */
+    public Mono<Void> moveToAccount(String legacyUserId, String accountId) {
+        // A song both keys have used would break the unique key, so the old copy goes first.
+        return databaseClient.sql("""
+                        DELETE FROM user_used_tracks
+                        WHERE spotify_user_id = :legacyUserId
+                          AND normalized_key IN (
+                              SELECT normalized_key FROM user_used_tracks WHERE spotify_user_id = :accountId
+                          )
+                        """)
+                .bind("legacyUserId", legacyUserId)
+                .bind("accountId", accountId)
+                .fetch()
+                .rowsUpdated()
+                .then(databaseClient.sql("UPDATE user_used_tracks SET spotify_user_id = :accountId WHERE spotify_user_id = :legacyUserId")
+                        .bind("accountId", accountId)
+                        .bind("legacyUserId", legacyUserId)
+                        .fetch()
+                        .rowsUpdated())
+                .then(databaseClient.sql("UPDATE created_playlists SET spotify_user_id = :accountId WHERE spotify_user_id = :legacyUserId")
+                        .bind("accountId", accountId)
+                        .bind("legacyUserId", legacyUserId)
+                        .fetch()
+                        .rowsUpdated())
+                .then();
+    }
+
     private Mono<Void> saveUsedTracks(
             String spotifyUserId,
             String playlistId,

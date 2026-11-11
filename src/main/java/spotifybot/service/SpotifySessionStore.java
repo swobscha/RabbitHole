@@ -112,6 +112,15 @@ public class SpotifySessionStore {
                 .then();
     }
 
+    public Mono<Void> moveToAccount(String legacyUserId, String accountId) {
+        return databaseClient.sql("UPDATE spotify_sessions SET spotify_user_id = :accountId WHERE spotify_user_id = :legacyUserId")
+                .bind("accountId", accountId)
+                .bind("legacyUserId", legacyUserId)
+                .fetch()
+                .rowsUpdated()
+                .then();
+    }
+
     public Mono<Void> deleteIdleSince(long cutoffMs) {
         return databaseClient.sql("DELETE FROM spotify_sessions WHERE last_used_at < :cutoff")
                 .bind("cutoff", cutoffMs)

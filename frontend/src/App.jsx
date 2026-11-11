@@ -648,7 +648,6 @@ function App() {
             playlistName: playlist.playlistName,
             seedArtist: playlist.seedArtist,
             tracks: playlist.tracks,
-            reserveTracks: playlist.reserveTracks || [],
             targetTrackCount: playlist.tracks.length,
         };
 

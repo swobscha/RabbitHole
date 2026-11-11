@@ -37,6 +37,7 @@ public class SpotifyAuthService {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final SpotifySessionStore sessionStore;
+    private final PlaylistHistoryService playlistHistoryService;
     private final WebClient accountsWebClient;
     private final WebClient apiWebClient;
     private final String authorizeUrl;
@@ -58,10 +59,12 @@ public class SpotifyAuthService {
 
     public SpotifyAuthService(
             SpotifySessionStore sessionStore,
+            PlaylistHistoryService playlistHistoryService,
             @Value("${SPOTIFY_ACCOUNTS_URL:https://accounts.spotify.com}") String accountsUrl,
             @Value("${SPOTIFY_API_URL:https://api.spotify.com/v1}") String apiUrl
     ) {
         this.sessionStore = sessionStore;
+        this.playlistHistoryService = playlistHistoryService;
         this.accountsWebClient = WebClient.builder().baseUrl(accountsUrl).build();
         this.apiWebClient = WebClient.builder().baseUrl(apiUrl).build();
         this.authorizeUrl = accountsUrl + "/authorize";
@@ -98,8 +101,9 @@ public class SpotifyAuthService {
                     .fromFormData("grant_type", "authorization_code")
                     .with("code", code)
                     .with("redirect_uri", redirectUri))
-                    .flatMap(tokens -> fetchSpotifyUserId(requireAccessToken(tokens))
-                            .flatMap(spotifyUserId -> createSession(spotifyUserId, tokens)));
+                    .flatMap(tokens -> fetchSpotifyAccount(requireAccessToken(tokens))
+                            .flatMap(account -> moveLegacyData(account)
+                                    .then(createSession(account.accountId(), tokens))));
         });
     }
 
@@ -135,13 +139,46 @@ public class SpotifyAuthService {
         return session.refreshOnce(() -> refreshAccessToken(session));
     }
 
-    /** Ends every session this Spotify account has, on all devices. */
-    public Mono<Void> disconnectAccount(SpotifySession session) {
+    /**
+     * Deletes the account's history and ends every session it has, on all devices, as Spotify's
+     * developer policy requires on disconnect. History goes first so that a failure leaves the
+     * user connected and able to retry.
+     */
+    public Mono<Void> deleteAccount(SpotifySession session) {
         String spotifyUserId = session.spotifyUserId();
 
-        activeSessions.asMap().values().removeIf(cached -> cached.spotifyUserId().equals(spotifyUserId));
+        return playlistHistoryService.clearHistory(spotifyUserId)
+                .then(Mono.defer(() -> {
+                    forgetCachedSessions(spotifyUserId);
+                    return sessionStore.deleteAllForUser(spotifyUserId);
+                }));
+    }
 
-        return sessionStore.deleteAllForUser(spotifyUserId);
+    private void forgetCachedSessions(String spotifyUserId) {
+        activeSessions.asMap().values().removeIf(cached -> cached.spotifyUserId().equals(spotifyUserId));
+    }
+
+    /**
+     * Accounts used to be keyed by Spotify's user id, which can change. Spotify now recommends
+     * account_id, so data saved under the old id is moved to the account_id at login.
+     */
+    private Mono<Void> moveLegacyData(SpotifyAccount account) {
+        String legacyUserId = account.legacyUserId();
+
+        if (legacyUserId.isBlank() || legacyUserId.equals(account.accountId())) {
+            return Mono.empty();
+        }
+
+        return Mono.defer(() -> {
+                    forgetCachedSessions(legacyUserId);
+
+                    return playlistHistoryService.moveToAccount(legacyUserId, account.accountId())
+                            .then(sessionStore.moveToAccount(legacyUserId, account.accountId()));
+                })
+                .onErrorResume(error -> {
+                    log.error("Could not move data saved under a Spotify user id to its account id.", error);
+                    return Mono.empty();
+                });
     }
 
     public boolean isConfigured() {
@@ -209,6 +246,12 @@ public class SpotifyAuthService {
                 .onErrorResume(WebClientResponseException.class, error -> {
                     log.warn("Spotify token refresh failed with status {}.", error.getStatusCode().value());
 
+                    // invalid_grant means the user removed this app's access in their Spotify account,
+                    // which Spotify's developer policy treats as a request to delete their data.
+                    if (error.getStatusCode().value() == 400 && error.getResponseBodyAsString().contains("invalid_grant")) {
+                        return deleteAccount(session).then(Mono.<String>error(accessRemoved()));
+                    }
+
                     if (error.getStatusCode().value() == 400) {
                         return endSession(session).then(Mono.<String>error(connectionExpired()));
                     }
@@ -237,15 +280,20 @@ public class SpotifyAuthService {
                 .timeout(REQUEST_TIMEOUT);
     }
 
-    private Mono<String> fetchSpotifyUserId(String accessToken) {
+    private Mono<SpotifyAccount> fetchSpotifyAccount(String accessToken) {
         return apiWebClient.get()
                 .uri("/me")
                 .headers(headers -> headers.setBearerAuth(accessToken))
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .timeout(REQUEST_TIMEOUT)
-                .map(json -> json.path("id").asText(""))
-                .filter(id -> !id.isBlank())
+                .map(json -> {
+                    String userId = json.path("id").asText("");
+                    String accountId = json.path("account_id").asText("");
+
+                    return new SpotifyAccount(accountId.isBlank() ? userId : accountId, userId);
+                })
+                .filter(account -> !account.accountId().isBlank())
                 .switchIfEmpty(Mono.error(() -> new ResponseStatusException(
                         HttpStatus.BAD_GATEWAY,
                         "Spotify did not return an account id."
@@ -306,6 +354,18 @@ public class SpotifyAuthService {
                 HttpStatus.UNAUTHORIZED,
                 "Spotify is not connected. Connect Spotify and try again."
         );
+    }
+
+    private ResponseStatusException accessRemoved() {
+        return new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "MusicFinder's access was removed in your Spotify account, so your MusicFinder data was deleted. "
+                        + "Connect Spotify to start again."
+        );
+    }
+
+    /** accountId is Spotify's stable account_id; legacyUserId is the older id it replaces. */
+    private record SpotifyAccount(String accountId, String legacyUserId) {
     }
 
     private ResponseStatusException connectionExpired() {

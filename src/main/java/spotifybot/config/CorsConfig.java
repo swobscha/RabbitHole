@@ -1,5 +1,7 @@
 package spotifybot.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,6 +17,8 @@ import java.util.List;
 @Configuration
 public class CorsConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(CorsConfig.class);
+
     @Value("${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}")
     private String corsAllowedOrigins;
 
@@ -24,7 +28,7 @@ public class CorsConfig {
     public CorsWebFilter corsWebFilter() {
         List<String> allowedOrigins = parseAllowedOrigins(corsAllowedOrigins);
 
-        System.out.println("CORS allowed frontend origins: " + allowedOrigins);
+        log.info("CORS allowed frontend origins: {}", allowedOrigins);
 
         CorsConfiguration config = new CorsConfiguration();
 

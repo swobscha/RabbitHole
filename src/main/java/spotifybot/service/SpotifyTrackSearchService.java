@@ -2,6 +2,8 @@ package spotifybot.service;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -21,6 +23,8 @@ import java.util.Set;
 
 @Service
 public class SpotifyTrackSearchService {
+
+    private static final Logger log = LoggerFactory.getLogger(SpotifyTrackSearchService.class);
 
     private static final long DEFAULT_SPOTIFY_BACKOFF_SECONDS = 30;
 
@@ -51,10 +55,6 @@ public class SpotifyTrackSearchService {
                 .build();
     }
 
-    public Mono<String> findSpotifyUri(String accessToken, TrackCandidate track) {
-        return findSpotifyUri(accessToken, track, "");
-    }
-
     public Mono<String> findSpotifyUri(
             String accessToken,
             TrackCandidate track,
@@ -67,12 +67,7 @@ public class SpotifyTrackSearchService {
         if (isSpotifyRateLimited()) {
             long secondsLeft = secondsUntilSpotifyReady();
 
-            System.out.println(
-                    "Spotify search skipped because rate limit cooldown is active."
-                            + " Wait about "
-                            + secondsLeft
-                            + " seconds."
-            );
+            log.warn("Spotify search skipped during a rate-limit cooldown | secondsLeft={}", secondsLeft);
 
             return Mono.error(new ResponseStatusException(
                     HttpStatus.TOO_MANY_REQUESTS,
@@ -118,7 +113,7 @@ public class SpotifyTrackSearchService {
                         missCache.put(cacheKey, Boolean.TRUE);
                     }
 
-                    System.out.println("Spotify could not resolve: " + track.artistName() + " - " + track.name());
+                    log.debug("Spotify could not resolve | artist={} | track={}", track.artistName(), track.name());
                     return Mono.empty();
                 });
     }
@@ -184,19 +179,14 @@ public class SpotifyTrackSearchService {
 
                         if (!requiredSpotifyArtistId.isBlank()
                                 && !spotifyArtistIds.contains(requiredSpotifyArtistId)) {
-                            System.out.println(
-                                    "Spotify rejected wrong seed artist: "
-                                            + artistName
-                                            + " - "
-                                            + trackName
-                                            + " -> "
-                                            + spotifyTrackName
-                                            + " by "
-                                            + spotifyArtists
-                                            + " | spotifyArtistIds="
-                                            + spotifyArtistIds
-                                            + " | requiredSeedArtistId="
-                                            + requiredSpotifyArtistId
+                            log.debug(
+                                    "Spotify result rejected, wrong seed artist | wanted={} - {} | got={} by {} | artistIds={} | requiredArtistId={}",
+                                    artistName,
+                                    trackName,
+                                    spotifyTrackName,
+                                    spotifyArtists,
+                                    spotifyArtistIds,
+                                    requiredSpotifyArtistId
                             );
 
                             return;
@@ -214,21 +204,15 @@ public class SpotifyTrackSearchService {
                         }
 
                         if (!matchScore.valid()) {
-                            System.out.println(
-                                    "Spotify rejected weak match: "
-                                            + artistName
-                                            + " - "
-                                            + trackName
-                                            + " -> "
-                                            + spotifyTrackName
-                                            + " by "
-                                            + spotifyArtists
-                                            + " | trackScore="
-                                            + matchScore.trackScore()
-                                            + " artistScore="
-                                            + matchScore.artistScore()
-                                            + " total="
-                                            + matchScore.totalScore()
+                            log.debug(
+                                    "Spotify result rejected, weak match | wanted={} - {} | got={} by {} | trackScore={} | artistScore={} | total={}",
+                                    artistName,
+                                    trackName,
+                                    spotifyTrackName,
+                                    spotifyArtists,
+                                    matchScore.trackScore(),
+                                    matchScore.artistScore(),
+                                    matchScore.totalScore()
                             );
 
                             return;
@@ -248,21 +232,15 @@ public class SpotifyTrackSearchService {
                     return scoredTracks.stream()
                             .max(Comparator.comparingInt(ScoredSpotifyTrack::totalScore))
                             .map(result -> {
-                                System.out.println(
-                                        "Spotify resolved: "
-                                                + artistName
-                                                + " - "
-                                                + trackName
-                                                + " -> "
-                                                + result.spotifyTrackName()
-                                                + " by "
-                                                + result.spotifyArtists()
-                                                + " | trackScore "
-                                                + result.trackScore()
-                                                + " | artistScore "
-                                                + result.artistScore()
-                                                + " | total "
-                                                + result.totalScore()
+                                log.debug(
+                                        "Spotify resolved | wanted={} - {} | got={} by {} | trackScore={} | artistScore={} | total={}",
+                                        artistName,
+                                        trackName,
+                                        result.spotifyTrackName(),
+                                        result.spotifyArtists(),
+                                        result.trackScore(),
+                                        result.artistScore(),
+                                        result.totalScore()
                                 );
 
                                 return Mono.just(LookupResult.found(result.uri()));
@@ -276,13 +254,11 @@ public class SpotifyTrackSearchService {
         if (error instanceof WebClientResponseException responseException) {
             int status = responseException.getStatusCode().value();
 
-            System.out.println(
-                    "Spotify search error for query ["
-                            + query
-                            + "]: "
-                            + status
-                            + " "
-                            + responseException.getResponseBodyAsString()
+            log.warn(
+                    "Spotify search failed | status={} | query={} | body={}",
+                    status,
+                    query,
+                    responseException.getResponseBodyAsString()
             );
 
             if (status == 429) {
@@ -318,7 +294,7 @@ public class SpotifyTrackSearchService {
             return Mono.just(LookupResult.unknown());
         }
 
-        System.out.println("Spotify search error for query [" + query + "]: " + error.getMessage());
+        log.warn("Spotify search failed | query={} | error={}", query, error.getClass().getSimpleName());
         return Mono.just(LookupResult.unknown());
     }
 

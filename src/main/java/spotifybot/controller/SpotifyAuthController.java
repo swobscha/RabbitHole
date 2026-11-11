@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
-import spotifybot.service.PlaylistHistoryService;
 import spotifybot.service.SpotifyAuthService;
 
 import java.net.URI;
@@ -38,17 +37,12 @@ public class SpotifyAuthController {
     private static final Duration LOGIN_STATE_LIFETIME = Duration.ofMinutes(10);
 
     private final SpotifyAuthService spotifyAuthService;
-    private final PlaylistHistoryService playlistHistoryService;
 
     @Value("${FRONTEND_URL:http://localhost:5173}")
     private String frontendUrl;
 
-    public SpotifyAuthController(
-            SpotifyAuthService spotifyAuthService,
-            PlaylistHistoryService playlistHistoryService
-    ) {
+    public SpotifyAuthController(SpotifyAuthService spotifyAuthService) {
         this.spotifyAuthService = spotifyAuthService;
-        this.playlistHistoryService = playlistHistoryService;
     }
 
     @GetMapping("/login")
@@ -112,17 +106,13 @@ public class SpotifyAuthController {
                 ));
     }
 
-    /**
-     * Disconnects the account and deletes its data, as Spotify's developer policy requires.
-     * History goes first so that a failure leaves the user connected and able to retry.
-     */
+    /** Disconnects the account and deletes its data, as Spotify's developer policy requires. */
     @PostMapping("/logout")
     public Mono<Map<String, Object>> logout(
             @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization
     ) {
         return spotifyAuthService.findSession(authorization)
-                .flatMap(session -> playlistHistoryService.clearHistory(session.spotifyUserId())
-                        .then(spotifyAuthService.disconnectAccount(session)))
+                .flatMap(spotifyAuthService::deleteAccount)
                 .thenReturn(Map.of(
                         "connected", false,
                         "status", "Spotify disconnected and your MusicFinder data was deleted"

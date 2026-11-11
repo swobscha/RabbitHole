@@ -83,7 +83,7 @@ final class FakeMusicApis {
     private void handleMe(HttpExchange exchange) throws IOException {
         String accessToken = exchange.getRequestHeaders().getFirst("Authorization").replace("Bearer access-", "");
 
-        respond(exchange, 200, "{\"id\":\"user-" + accessToken + "\"}");
+        respond(exchange, 200, "{\"id\":\"user-" + accessToken + "\",\"account_id\":\"account-" + accessToken + "\"}");
     }
 
     private void handleSearch(HttpExchange exchange) throws IOException {

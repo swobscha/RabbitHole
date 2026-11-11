@@ -1,5 +1,7 @@
 package spotifybot.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.scheduler.Schedulers;
@@ -17,6 +19,8 @@ import java.util.List;
 
 @Service
 public class RankingDebugService {
+
+    private static final Logger log = LoggerFactory.getLogger(RankingDebugService.class);
 
     private static final int MAX_ROWS = 5000;
 
@@ -107,9 +111,9 @@ public class RankingDebugService {
 
             Files.writeString(filePath, csv.toString(), StandardCharsets.UTF_8);
 
-            System.out.println("Ranking debug CSV written: " + filePath.toAbsolutePath());
+            log.info("Ranking debug CSV written: {}", filePath.toAbsolutePath());
         } catch (IOException error) {
-            System.out.println("Could not write ranking debug CSV: " + error.getMessage());
+            log.warn("Could not write ranking debug CSV: {}", error.getMessage());
         }
     }
 
@@ -182,9 +186,9 @@ public class RankingDebugService {
 
             Files.writeString(filePath, csv.toString(), StandardCharsets.UTF_8);
 
-            System.out.println("Selected debug CSV written: " + filePath.toAbsolutePath());
+            log.info("Selected debug CSV written: {}", filePath.toAbsolutePath());
         } catch (IOException error) {
-            System.out.println("Could not write selected debug CSV: " + error.getMessage());
+            log.warn("Could not write selected debug CSV: {}", error.getMessage());
         }
     }
 

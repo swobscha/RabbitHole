@@ -459,7 +459,7 @@ class ApiFlowIntegrationTest {
         create(other, seed, generate(other, seed, 2).tracks()).expectStatus().isOk();
 
         assertTrue(connected(laptop));
-        assertEquals(2L, usedTrackCount("user-" + code));
+        assertEquals(2L, usedTrackCount("account-" + code));
 
         client().post().uri("/api/spotify/logout")
                 .headers(headers -> headers.setBearerAuth(phone))
@@ -469,7 +469,7 @@ class ApiFlowIntegrationTest {
         assertFalse(connected(phone));
         assertFalse(connected(laptop));
         assertNull(sessionStore.load(laptop).block());
-        assertEquals(0L, usedTrackCount("user-" + code));
+        assertEquals(0L, usedTrackCount("account-" + code));
         assertTrue(history(login(code)).isEmpty());
         assertEquals(1, history(other).size());
     }
@@ -498,9 +498,14 @@ class ApiFlowIntegrationTest {
     }
 
     @Test
-    void revokedSpotifyAccessEndsTheSession() {
+    void removingAccessInSpotifyDeletesTheAccountsData() {
         String code = "short" + uniqueCode();
         String token = login(code);
+        String owner = "account-" + code;
+
+        insertHistory(owner, "Kept until access is removed");
+        assertEquals(1L, playlistCount(owner));
+        assertEquals(1L, usedTrackCount(owner));
 
         FAKE.revokedRefreshTokens.add("refresh-" + code);
 
@@ -510,9 +515,66 @@ class ApiFlowIntegrationTest {
                 .exchange()
                 .expectStatus().isUnauthorized()
                 .expectBody()
-                .jsonPath("$.message").isEqualTo("Your Spotify connection has expired. Connect Spotify and try again.");
+                .jsonPath("$.message").isEqualTo(
+                        "MusicFinder's access was removed in your Spotify account, so your MusicFinder data was deleted. "
+                                + "Connect Spotify to start again."
+                );
 
         assertFalse(connected(token));
+        assertEquals(0L, playlistCount(owner));
+        assertEquals(0L, usedTrackCount(owner));
+    }
+
+    @Test
+    void historySavedUnderTheOldUserIdMovesToTheAccountIdAtLogin() {
+        String code = uniqueCode();
+        String legacyOwner = "user-" + code;
+        String accountOwner = "account-" + code;
+
+        insertHistory(legacyOwner, "Saved before account ids");
+
+        List<CreatedPlaylistHistoryItem> items = history(login(code));
+
+        assertEquals(1, items.size());
+        assertEquals("Saved before account ids", items.get(0).playlistName());
+        assertEquals(0L, playlistCount(legacyOwner));
+        assertEquals(0L, usedTrackCount(legacyOwner));
+        assertEquals(1L, usedTrackCount(accountOwner));
+    }
+
+    private void insertHistory(String owner, String playlistName) {
+        databaseClient.sql("""
+                        INSERT INTO created_playlists
+                            (id, spotify_user_id, playlist_name, seed_artist, track_count, spotify_playlist_url, created_at)
+                        VALUES (:id, :owner, :name, 'Seed', 1, 'https://open.spotify.com/playlist/old', '2026-11-01T00:00:00Z')
+                        """)
+                .bind("id", UUID.randomUUID().toString())
+                .bind("owner", owner)
+                .bind("name", playlistName)
+                .fetch()
+                .rowsUpdated()
+                .block();
+
+        databaseClient.sql("""
+                        INSERT INTO user_used_tracks
+                            (id, spotify_user_id, playlist_id, track_name, artist_name, normalized_key, spotify_uri, created_at)
+                        VALUES (:id, :owner, 'old', 'Song', 'Seed', 'seed|song', 'spotify:track:old', '2026-11-01T00:00:00Z')
+                        """)
+                .bind("id", UUID.randomUUID().toString())
+                .bind("owner", owner)
+                .fetch()
+                .rowsUpdated()
+                .block();
+    }
+
+    private long playlistCount(String owner) {
+        Long count = databaseClient.sql("SELECT COUNT(*) AS \"total\" FROM created_playlists WHERE spotify_user_id = :id")
+                .bind("id", owner)
+                .map((row, metadata) -> row.get("total", Long.class))
+                .one()
+                .block();
+
+        return count == null ? 0L : count;
     }
 
     @Test
@@ -523,7 +585,7 @@ class ApiFlowIntegrationTest {
         SpotifySession restored = sessionStore.load(token).block();
 
         assertNotNull(restored);
-        assertEquals("user-" + code, restored.spotifyUserId());
+        assertEquals("account-" + code, restored.spotifyUserId());
         assertEquals("refresh-" + code, restored.refreshToken());
 
         List<Map<String, Object>> rows = databaseClient.sql("SELECT * FROM spotify_sessions")

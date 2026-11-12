@@ -888,9 +888,11 @@ function App() {
                                             )}
 
                                             <span className="artist-name">{artist.name}</span>
-                                            <span className="artist-meta">
-                                                {formatNumber(artist.followers)} followers
-                                            </span>
+                                            {Number(artist.followers) > 0 && (
+                                                <span className="artist-meta">
+                                                    {formatNumber(artist.followers)} followers
+                                                </span>
+                                            )}
 
                                             {artist.genres?.length > 0 && (
                                                 <span className="artist-genres">

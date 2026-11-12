@@ -507,6 +507,8 @@ input[type="range"]:hover::-moz-range-thumb {
 }
 
 .artist-option {
+  /* Fills the card's grid row so every "View on Spotify" link lines up. */
+  flex: 1;
   width: 100%;
   min-width: 0;
   min-height: 174px;
@@ -918,13 +920,18 @@ summary {
   margin: 6px 0 0;
 }
 
+.track-details li {
+  font-size: 0.76rem;
+}
+
 .track-actions {
   margin-top: 12px;
   padding-top: 11px;
   border-top: 1px solid var(--border);
 }
 
-.track-actions .text-link {
+/* Keeps the links together on the left and the buttons on the right. */
+.track-actions .text-link:last-of-type {
   margin-right: auto;
 }
 

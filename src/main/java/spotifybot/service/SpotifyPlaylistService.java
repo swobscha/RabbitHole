@@ -74,7 +74,7 @@ public class SpotifyPlaylistService {
                                                 .thenReturn(new CreatedPlaylistResponse(
                                                         spotifyPlaylist.name(),
                                                         resolvedTracks.size(),
-                                                        "Real Spotify playlist created and tracks added successfully",
+                                                        "Playlist created on Spotify",
                                                         playlistUrl(spotifyPlaylist)
                                                 ))
                                 )

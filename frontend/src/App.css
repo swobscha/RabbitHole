@@ -649,21 +649,48 @@ input[type="range"]:focus-visible {
   text-align: center;
 }
 
-.seed-artist-image {
-  width: 104px;
-  height: 104px;
-  margin-bottom: 12px;
-  border-radius: 50%;
-  object-fit: cover;
-  box-shadow: 0 0 0 3px var(--green-ring), var(--shadow-soft);
+/* A wide crop of the artist's photo that fades out behind the label and name. */
+.seed-artist-banner {
+  position: relative;
+  width: 100%;
+  height: 170px;
+  margin-bottom: -38px;
+  overflow: hidden;
+  border-radius: 14px;
 }
 
+/* Faces usually sit in the upper third of artist photos, so the crop favors that area. */
+.seed-artist-banner img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 30%;
+  filter: brightness(0.85);
+  -webkit-mask-image: linear-gradient(180deg, #000 45%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 45%, transparent 100%);
+}
+
+/* Used when the artist has no photo. */
 .seed-artist-initial {
-  font-size: 2.4rem;
+  width: 100%;
+  height: 100%;
+  padding-bottom: 40px;
+  background: linear-gradient(135deg, var(--green-soft), var(--panel-soft));
+  font-size: 3rem;
+  -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 55%, transparent 100%);
+}
+
+.seed-artist-label,
+.seed-artist-name,
+.seed-artist-link {
+  position: relative;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.6);
 }
 
 .seed-artist-label {
-  color: var(--muted);
+  color: var(--muted-2);
   font-size: var(--text-sm);
 }
 
@@ -682,17 +709,17 @@ input[type="range"]:focus-visible {
 }
 
 .completed-step .seed-artist {
-  flex-direction: row;
-  justify-content: center;
-  gap: 10px;
   padding-bottom: 8px;
 }
 
-.completed-step .seed-artist-image {
-  width: 40px;
-  height: 40px;
-  margin-bottom: 0;
-  font-size: 1rem;
+.completed-step .seed-artist-banner {
+  height: 56px;
+  margin-bottom: -24px;
+}
+
+.completed-step .seed-artist-initial {
+  padding-bottom: 20px;
+  font-size: 1.4rem;
 }
 
 .completed-step .seed-artist-label,

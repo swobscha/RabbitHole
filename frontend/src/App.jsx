@@ -1022,17 +1022,16 @@ function App() {
 
                                 {selectedSeedArtist && (
                                     <div className="seed-artist">
-                                        {selectedSeedArtist.imageUrl ? (
-                                            <img
-                                                className="seed-artist-image"
-                                                src={selectedSeedArtist.imageUrl}
-                                                alt=""
-                                            />
-                                        ) : (
-                                            <span className="seed-artist-image seed-artist-initial" aria-hidden="true">
-                                                {selectedSeedArtist.name?.charAt(0)?.toUpperCase() || "?"}
-                                            </span>
-                                        )}
+                                        {/* Spotify's API has no artist banners, so the photo is cropped into one. */}
+                                        <div className="seed-artist-banner" aria-hidden="true">
+                                            {selectedSeedArtist.imageUrl ? (
+                                                <img src={selectedSeedArtist.imageUrl} alt="" />
+                                            ) : (
+                                                <span className="seed-artist-initial">
+                                                    {selectedSeedArtist.name?.charAt(0)?.toUpperCase() || "?"}
+                                                </span>
+                                            )}
+                                        </div>
 
                                         <p className="seed-artist-label">Seed artist</p>
                                         <p className="seed-artist-name">{selectedSeedArtist.name}</p>

@@ -979,7 +979,7 @@ input[type="range"]:focus-visible {
 
 .track-topline {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-columns: 28px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
 }
@@ -1014,12 +1014,6 @@ input[type="range"]:focus-visible {
   white-space: nowrap;
 }
 
-.score-chip {
-  color: var(--muted);
-  font-size: var(--text-md);
-  font-variant-numeric: tabular-nums;
-}
-
 .genre-row {
   display: flex;
   flex-wrap: wrap;
@@ -1043,42 +1037,6 @@ input[type="range"]:focus-visible {
   margin-top: 10px;
   border: 0;
   border-radius: 12px;
-}
-
-details {
-  margin-top: 8px;
-  color: var(--muted);
-}
-
-summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: var(--text-md);
-  font-weight: 600;
-}
-
-summary:hover {
-  color: var(--text);
-}
-
-.track-details {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px 14px;
-  margin-top: 8px;
-  padding: 12px;
-  border-radius: 6px;
-  background: var(--sunken);
-}
-
-.track-details p,
-.track-details li {
-  font-size: var(--text-sm);
-}
-
-.track-details ul {
-  grid-column: 1 / -1;
-  margin: 6px 0 0;
 }
 
 .track-actions {
@@ -1249,14 +1207,6 @@ summary:hover {
 
   .track-preview {
     width: 100%;
-  }
-
-  .track-details {
-    grid-template-columns: 1fr;
-  }
-
-  .track-details ul {
-    grid-column: auto;
   }
 
   .track-actions {

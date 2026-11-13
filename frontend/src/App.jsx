@@ -295,17 +295,6 @@ function App() {
         return number.toLocaleString();
     }
 
-    function formatSimilarity(value) {
-        const number = Number(value);
-
-        if (!Number.isFinite(number) || number <= 0) {
-            return "Unknown";
-        }
-
-        const normalized = number > 1 ? number / 100 : number;
-
-        return `${Math.round(normalized * 100)}%`;
-    }
 
     function formatSliderValue(value) {
         const number = Number(value);
@@ -382,17 +371,6 @@ function App() {
         const trackId = spotifyTrackId(track);
 
         return trackId ? `https://open.spotify.com/embed/track/${trackId}?utm_source=generator&theme=0` : "";
-    }
-
-    // Last.fm's terms ask for its data to link back to the matching catalogue page.
-    function lastFmTrackUrl(track) {
-        if (!track?.artistName || !track?.name) {
-            return "";
-        }
-
-        const part = (value) => encodeURIComponent(value).replace(/%20/g, "+");
-
-        return `https://www.last.fm/music/${part(track.artistName)}/_/${part(track.name)}`;
     }
 
     function buildGenerationRequest() {
@@ -507,7 +485,9 @@ function App() {
         }
     }
 
-    async function searchSeedArtists() {
+    // selectTopMatch picks the best match straight away (used by Enter); the other matches stay
+    // listed in step 2, so a wrong pick is one click to fix.
+    async function searchSeedArtists({ selectTopMatch = false } = {}) {
         if (!seedArtist.trim()) {
             setArtistSearchError("Enter a seed artist first.");
             return;
@@ -532,7 +512,9 @@ function App() {
 
             setSeedArtistOptions(options);
 
-            if (options.length > 0) {
+            if (options.length > 0 && selectTopMatch) {
+                selectSeedArtist(options[0]);
+            } else if (options.length > 0) {
                 setUiStage(3);
             } else {
                 setArtistSearchError("No matching Spotify artists found.");
@@ -541,6 +523,19 @@ function App() {
             setArtistSearchError(messageFromError(err, "Could not search Spotify artists."));
         } finally {
             setArtistSearchLoading(false);
+        }
+    }
+
+    // Enter in the artist box searches and picks the best match, instead of submitting the whole form.
+    function handleSeedArtistKeyDown(event) {
+        if (event.key !== "Enter" || event.nativeEvent.isComposing) {
+            return;
+        }
+
+        event.preventDefault();
+
+        if (!artistSearchLoading) {
+            searchSeedArtists({ selectTopMatch: true });
         }
     }
 
@@ -966,6 +961,7 @@ function App() {
                                     id="seedArtist"
                                     value={seedArtist}
                                     onChange={handleSeedArtistChange}
+                                    onKeyDown={handleSeedArtistKeyDown}
                                     placeholder="Daft Punk"
                                 />
                             </div>
@@ -974,7 +970,7 @@ function App() {
                                 <button
                                     type="button"
                                     className="button button-primary search-button"
-                                    onClick={searchSeedArtists}
+                                    onClick={() => searchSeedArtists()}
                                     disabled={artistSearchLoading}
                                 >
                                     {artistSearchLoading ? "Searching..." : "Find Matching Artists"}
@@ -1054,7 +1050,7 @@ function App() {
                                         <button
                                             type="button"
                                             className="button button-secondary"
-                                            onClick={searchSeedArtists}
+                                            onClick={() => searchSeedArtists()}
                                             disabled={artistSearchLoading}
                                         >
                                             {artistSearchLoading ? "Searching..." : "Search Again"}
@@ -1396,11 +1392,6 @@ function App() {
                                             <h3>{item.track.name}</h3>
                                             <p>{item.track.artistName}</p>
                                         </div>
-
-                                        <span className="score-chip">
-                                            <span className="visually-hidden">Score </span>
-                                            {Number(item.score).toFixed(1)}
-                                        </span>
                                     </div>
 
                                     {(item.track.genres || []).length > 0 && (
@@ -1421,25 +1412,6 @@ function App() {
                                         />
                                     )}
 
-                                    <details>
-                                        <summary>Why this track?</summary>
-                                        <div className="track-details">
-                                            <p>Track plays: {formatNumber(item.track.trackPlaycount)}</p>
-                                            <p>Track listeners: {formatNumber(item.track.trackListeners)}</p>
-                                            <p>Artist plays: {formatNumber(item.track.artistPlaycount)}</p>
-                                            <p>Artist listeners: {formatNumber(item.track.artistListeners)}</p>
-                                            <p>Artist similarity: {formatSimilarity(item.track.artistSimilarity)}</p>
-
-                                            {(item.reasons || []).length > 0 && (
-                                                <ul>
-                                                    {item.reasons.map((reason) => (
-                                                        <li key={reason}>{reason}</li>
-                                                    ))}
-                                                </ul>
-                                            )}
-                                        </div>
-                                    </details>
-
                                     <div className="track-actions">
                                         {spotifyUrl && (
                                             <a
@@ -1450,18 +1422,6 @@ function App() {
                                                 aria-label={`Open in Spotify: ${item.track.name}`}
                                             >
                                                 Open in Spotify ↗
-                                            </a>
-                                        )}
-
-                                        {lastFmTrackUrl(item.track) && (
-                                            <a
-                                                className="text-link"
-                                                href={lastFmTrackUrl(item.track)}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                aria-label={`Last.fm: ${item.track.name}`}
-                                            >
-                                                Last.fm ↗
                                             </a>
                                         )}
 

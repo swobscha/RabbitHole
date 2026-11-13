@@ -1,12 +1,14 @@
-# MusicFinder
+# RabbitHole
 
 [![CI](https://github.com/swobscha/spotify-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/swobscha/spotify-bot/actions/workflows/ci.yml)
 
-MusicFinder builds Spotify playlists of new music from an artist you choose. You pick a seed artist, choose how
-popular or obscure and how similar or different the songs should be, and MusicFinder finds matching tracks and
+*One artist in. Hours of music out.*
+
+RabbitHole builds Spotify playlists of new music from an artist you choose. You pick a seed artist, choose how
+popular or obscure and how similar or different the songs should be, and RabbitHole finds matching tracks and
 creates the playlist on your Spotify account.
 
-MusicFinder is not affiliated with or endorsed by Spotify or Last.fm.
+RabbitHole is not affiliated with or endorsed by Spotify or Last.fm.
 
 ## How it works
 
@@ -63,7 +65,7 @@ From the project root:
 ```
 
 In Windows PowerShell use `.\mvnw.cmd spring-boot:run`. If Maven can't find Java, set `JAVA_HOME` to your JDK first. The
-backend runs on http://localhost:8080. You can also run `SpotifyBotApplication` from your IDE, as long as the working
+backend runs on http://localhost:8080. You can also run `RabbitHoleApplication` from your IDE, as long as the working
 directory is the project root.
 
 ### 4. Start the frontend
@@ -114,7 +116,7 @@ All settings are environment variables, or entries in `.env.local` for local dev
 | `RATE_LIMIT_TRUSTED_PROXY_HOPS` | Number of reverse proxies in front of the app; `0` ignores `X-Forwarded-For` | `0` |
 | `DEBUG_RANKINGS_ENABLED` | Writes ranking CSV files to `debug-rankings/` | `false` |
 | `SENTRY_DSN` | Turns on error alerts through [Sentry](https://sentry.io) | empty (off) |
-| `LOGGING_LEVEL_SPOTIFYBOT` | Log detail; `DEBUG` shows every Spotify match decision | `INFO` |
+| `LOGGING_LEVEL_RABBITHOLE` | Log detail; `DEBUG` shows every Spotify match decision | `INFO` |
 | `VITE_API_BASE_URL` | Frontend only: backend URL used by the built frontend | `http://localhost:8080` when run locally |
 
 The database tables are created or updated automatically at startup from `src/main/resources/schema.sql`.
@@ -167,8 +169,8 @@ Each Spotify account's history is kept separately, keyed by Spotify's stable `ac
 older Spotify user id is moved to the `account_id` the next time that person logs in. Spotify refresh tokens are
 stored encrypted with a key derived from the browser's session token, which is never stored on the server.
 
-**Disconnect** deletes the account's history and signs it out on every device. If someone removes MusicFinder in
-their Spotify account settings instead, their data is deleted the next time MusicFinder tries to use that access.
+**Disconnect** deletes the account's history and signs it out on every device. If someone removes RabbitHole in
+their Spotify account settings instead, their data is deleted the next time RabbitHole tries to use that access.
 The privacy policy is at `frontend/public/privacy.html`.
 
 ## Limits

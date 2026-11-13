@@ -1,4 +1,4 @@
-# Connect Spotify in the app first, then copy the "spotifyBotSession" value from the
+# Connect Spotify in the app first, then copy the "rabbitholeSession" value from the
 # browser's localStorage into sessionToken below.
 @sessionToken = paste-session-token-here
 

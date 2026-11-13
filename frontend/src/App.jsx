@@ -18,12 +18,27 @@ function apiUrl(path) {
     return `${cleanBaseUrl}${cleanPath}`;
 }
 
-const SESSION_STORAGE_KEY = "spotifyBotSession";
+const SESSION_STORAGE_KEY = "rabbitholeSession";
+// The key used before the app was renamed. Read once so people stay signed in after the rename.
+const LEGACY_SESSION_STORAGE_KEY = "spotifyBotSession";
 let sessionTokenInMemory = "";
 
 function readSessionToken() {
     try {
-        return window.localStorage.getItem(SESSION_STORAGE_KEY) || sessionTokenInMemory;
+        const token = window.localStorage.getItem(SESSION_STORAGE_KEY);
+
+        if (token) {
+            return token;
+        }
+
+        const legacyToken = window.localStorage.getItem(LEGACY_SESSION_STORAGE_KEY);
+
+        if (legacyToken) {
+            writeSessionToken(legacyToken);
+            return legacyToken;
+        }
+
+        return sessionTokenInMemory;
     } catch {
         return sessionTokenInMemory;
     }
@@ -38,6 +53,8 @@ function writeSessionToken(token) {
         } else {
             window.localStorage.removeItem(SESSION_STORAGE_KEY);
         }
+
+        window.localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
     } catch {
         // Storage can be blocked; the session then lasts until the page is closed.
     }
@@ -75,7 +92,7 @@ function createGenerationSeed() {
 
 function App() {
     const [seedArtist, setSeedArtist] = useState("");
-    const [playlistName, setPlaylistName] = useState("MusicFinder Mix");
+    const [playlistName, setPlaylistName] = useState("RabbitHole Mix");
     const [playlistSize, setPlaylistSize] = useState(20);
     const [restrictedArtists, setRestrictedArtists] = useState("");
     const [preferredArtists, setPreferredArtists] = useState("");
@@ -180,7 +197,7 @@ function App() {
     }
 
     function backendOfflineMessage() {
-        return "Could not reach the MusicFinder server. Please try again in a moment.";
+        return "Could not reach the RabbitHole server. Please try again in a moment.";
     }
 
     async function readApiError(response, fallbackMessage) {
@@ -477,7 +494,7 @@ function App() {
 
     async function disconnectSpotify() {
         const confirmed = window.confirm(
-            "Disconnect Spotify? This also deletes your MusicFinder playlist history. Playlists already on Spotify are not affected."
+            "Disconnect Spotify? This also deletes your RabbitHole playlist history. Playlists already on Spotify are not affected."
         );
 
         if (!confirmed) {
@@ -738,9 +755,9 @@ function App() {
             <header className="app-header">
                 <div>
                     <p className="eyebrow">DISCOVERY ENGINE</p>
-                    <h1>MusicFinder</h1>
+                    <h1>RabbitHole</h1>
                     <p className="header-copy">
-                        Build a playlist one decision at a time.
+                        One artist in. Hours of music out.
                     </p>
                 </div>
             </header>
@@ -1415,7 +1432,7 @@ function App() {
                 <p>
                     <a href="/privacy.html">Privacy policy</a>
                     {" · "}
-                    MusicFinder is not affiliated with or endorsed by Spotify or Last.fm.
+                    RabbitHole is not affiliated with or endorsed by Spotify or Last.fm.
                 </p>
             </footer>
         </main>

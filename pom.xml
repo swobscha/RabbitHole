@@ -12,11 +12,11 @@
 		<relativePath/>
 	</parent>
 
-	<groupId>com.spotifybot</groupId>
-	<artifactId>spotify-bot</artifactId>
+	<groupId>com.rabbithole</groupId>
+	<artifactId>rabbithole</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name>spotify-bot</name>
-	<description>Spotify playlist discovery bot</description>
+	<name>rabbithole</name>
+	<description>RabbitHole playlist discovery app</description>
 
 	<properties>
 		<java.version>17</java.version>

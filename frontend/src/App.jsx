@@ -90,6 +90,28 @@ function createGenerationSeed() {
     return `${Date.now()}-${Math.random()}`;
 }
 
+function StepHeading({ eyebrow, title, description, badge }) {
+    return (
+        <div className="step-heading">
+            <div>
+                <span className="eyebrow">{eyebrow}</span>
+                <h2>{title}</h2>
+                {description && <p className="step-description">{description}</p>}
+            </div>
+
+            {badge && <span className="step-complete">{badge}</span>}
+        </div>
+    );
+}
+
+function BackButton({ onClick }) {
+    return (
+        <button type="button" className="button button-back" onClick={onClick}>
+            <span aria-hidden="true">← </span>Back
+        </button>
+    );
+}
+
 function App() {
     const [seedArtist, setSeedArtist] = useState("");
     const [playlistName, setPlaylistName] = useState("RabbitHole Mix");
@@ -792,11 +814,26 @@ function App() {
         return "wizard-step";
     }
 
+    // Read out by screen readers while something is loading, and once a playlist is ready.
+    let statusMessage = "";
+
+    if (artistSearchLoading) {
+        statusMessage = "Searching for artists…";
+    } else if (loading) {
+        statusMessage = "Generating your playlist…";
+    } else if (creating) {
+        statusMessage = "Creating the playlist on Spotify…";
+    } else if (replacingTrackIndex !== null) {
+        statusMessage = "Replacing the track…";
+    } else if (playlist) {
+        statusMessage = `Playlist ready with ${playlist.tracks.length} tracks.`;
+    }
+
     return (
         <main className="page-shell">
             <header className="app-header">
                 <div>
-                    <p className="eyebrow">DISCOVERY ENGINE</p>
+                    <p className="eyebrow">Discovery engine</p>
                     <h1>RabbitHole</h1>
                     <p className="header-copy">
                         One artist in. Hours of music out.
@@ -805,15 +842,12 @@ function App() {
             </header>
 
             <div className="wizard">
-                <section className="wizard-step account-step">
-                    <div className="step-heading">
-                        <div>
-                            <span className="stage-kicker">OPTIONAL</span>
-                            <h2>Connect Spotify</h2>
-                        </div>
-
-                        {spotifyConnected && <span className="step-complete">Connected</span>}
-                    </div>
+                <section className="wizard-step">
+                    <StepHeading
+                        eyebrow="Optional"
+                        title="Connect Spotify"
+                        badge={spotifyConnected && "Connected"}
+                    />
 
                     <ul className="mode-compare">
                         <li>
@@ -829,7 +863,7 @@ function App() {
                     {spotifyConnected ? (
                         <button
                             type="button"
-                            className="button button-secondary small-button disconnect-button"
+                            className="button button-secondary button-small disconnect-button"
                             onClick={disconnectSpotify}
                         >
                             Disconnect
@@ -837,7 +871,7 @@ function App() {
                     ) : (
                         <button
                             type="button"
-                            className="button spotify-button spotify-disconnected"
+                            className="button spotify-button"
                             onClick={connectSpotify}
                         >
                             <span className="spotify-button-text">Connect Spotify</span>
@@ -845,27 +879,18 @@ function App() {
                         </button>
                     )}
 
-                    {loginError && <p className="error">{loginError}</p>}
+                    {loginError && <p className="error" role="alert">{loginError}</p>}
                 </section>
 
                 {uiStage >= 2 && (
                     <form className="wizard-form" onSubmit={generatePlaylist}>
                         <section className={stageClass(2)}>
-                            <div className="step-heading">
-                                <div>
-                                    <span className="stage-kicker">STEP 01</span>
-                                    <h2>Find your seed artist</h2>
-                                    <p className="step-description">
-                                        Search Spotify so the generator knows exactly which artist you mean.
-                                    </p>
-                                </div>
-
-                                {uiStage > 2 && (
-                                    <span className="step-complete">
-                                        {seedArtist || "Artist entered"}
-                                    </span>
-                                )}
-                            </div>
+                            <StepHeading
+                                eyebrow="Step 01"
+                                title="Find your seed artist"
+                                description="Search Spotify so the generator knows exactly which artist you mean."
+                                badge={uiStage > 2 && (seedArtist || "Artist entered")}
+                            />
 
                             <div className="field">
                                 <label htmlFor="seedArtist">Seed Artist</label>
@@ -877,7 +902,7 @@ function App() {
                                 />
                             </div>
 
-                            <div className="stage-actions">
+                            <div className="step-actions">
                                 <button
                                     type="button"
                                     className="button button-primary search-button"
@@ -889,87 +914,74 @@ function App() {
                             </div>
 
                             {artistSearchError && (
-                                <p className="error">{artistSearchError}</p>
+                                <p className="error" role="alert">{artistSearchError}</p>
                             )}
                         </section>
 
                         {uiStage >= 3 && (
                             <section className={stageClass(3)}>
-                                <div className="step-heading">
-                                    <div>
-                                        <span className="stage-kicker">STEP 02</span>
-                                        <h2>Choose the right artist</h2>
-                                        <p className="step-description">
-                                            Pick one of the five Spotify matches. The selected artist becomes the seed.
-                                        </p>
-                                    </div>
-
-                                    {uiStage > 3 && selectedSeedArtist && (
-                                        <span className="step-complete">
-                                            {selectedSeedArtist.name}
-                                        </span>
-                                    )}
-                                </div>
+                                <StepHeading
+                                    eyebrow="Step 02"
+                                    title="Choose the right artist"
+                                    description="Pick one of the five Spotify matches. The selected artist becomes the seed."
+                                    badge={uiStage > 3 && selectedSeedArtist?.name}
+                                />
 
                                 <div className="artist-options">
                                     {seedArtistOptions.slice(0, 5).map((artist) => (
                                         <div key={artist.id} className="artist-choice">
-                                        <button
-                                            type="button"
-                                            className={`artist-option ${
-                                                selectedSeedArtist?.id === artist.id ? "selected" : ""
-                                            }`}
-                                            onClick={() => selectSeedArtist(artist)}
-                                        >
-                                            {artist.imageUrl ? (
-                                                <img
-                                                    className="artist-image"
-                                                    src={artist.imageUrl}
-                                                    alt=""
-                                                />
-                                            ) : (
-                                                <span className="artist-placeholder" aria-hidden="true">
-                                                    {artist.name?.charAt(0)?.toUpperCase() || "?"}
-                                                </span>
-                                            )}
-
-                                            <span className="artist-name">{artist.name}</span>
-                                            {Number(artist.followers) > 0 && (
-                                                <span className="artist-meta">
-                                                    {formatNumber(artist.followers)} followers
-                                                </span>
-                                            )}
-
-                                            {artist.genres?.length > 0 && (
-                                                <span className="artist-genres">
-                                                    {artist.genres.slice(0, 2).join(" · ")}
-                                                </span>
-                                            )}
-                                        </button>
-
-                                        {artist.spotifyUrl && (
-                                            <a
-                                                className="text-link artist-spotify-link"
-                                                href={artist.spotifyUrl}
-                                                target="_blank"
-                                                rel="noreferrer"
+                                            <button
+                                                type="button"
+                                                className={`artist-option ${
+                                                    selectedSeedArtist?.id === artist.id ? "selected" : ""
+                                                }`}
+                                                aria-pressed={selectedSeedArtist?.id === artist.id}
+                                                onClick={() => selectSeedArtist(artist)}
                                             >
-                                                View on Spotify ↗
-                                            </a>
-                                        )}
+                                                {artist.imageUrl ? (
+                                                    <img
+                                                        className="artist-image"
+                                                        src={artist.imageUrl}
+                                                        alt=""
+                                                    />
+                                                ) : (
+                                                    <span className="artist-placeholder" aria-hidden="true">
+                                                        {artist.name?.charAt(0)?.toUpperCase() || "?"}
+                                                    </span>
+                                                )}
+    
+                                                <span className="artist-name">{artist.name}</span>
+                                                {Number(artist.followers) > 0 && (
+                                                    <span className="artist-meta">
+                                                        {formatNumber(artist.followers)} followers
+                                                    </span>
+                                                )}
+    
+                                                {artist.genres?.length > 0 && (
+                                                    <span className="artist-genres">
+                                                        {artist.genres.slice(0, 2).join(" · ")}
+                                                    </span>
+                                                )}
+                                            </button>
+    
+                                            {artist.spotifyUrl && (
+                                                <a
+                                                    className="text-link artist-spotify-link"
+                                                    href={artist.spotifyUrl}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    aria-label={`View on Spotify: ${artist.name}`}
+                                                >
+                                                    View on Spotify ↗
+                                                </a>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
 
                                 {uiStage === 3 && (
-                                    <div className="stage-actions">
-                                        <button
-                                            type="button"
-                                            className="button button-back"
-                                            onClick={goBack}
-                                        >
-                                            ← Back
-                                        </button>
+                                    <div className="step-actions">
+                                        <BackButton onClick={goBack} />
 
                                         <button
                                             type="button"
@@ -986,21 +998,12 @@ function App() {
 
                         {uiStage >= 4 && (
                             <section className={stageClass(4)}>
-                                <div className="step-heading">
-                                    <div>
-                                        <span className="stage-kicker">STEP 03</span>
-                                        <h2>Name and size</h2>
-                                        <p className="step-description">
-                                            Give the playlist a name and choose how many songs you want.
-                                        </p>
-                                    </div>
-
-                                    {uiStage > 4 && (
-                                        <span className="step-complete">
-                                            {playlistSize} tracks
-                                        </span>
-                                    )}
-                                </div>
+                                <StepHeading
+                                    eyebrow="Step 03"
+                                    title="Name and size"
+                                    description="Give the playlist a name and choose how many songs you want."
+                                    badge={uiStage > 4 && `${playlistSize} tracks`}
+                                />
 
                                 {selectedSeedArtist && (
                                     <div className="selected-artist-summary">
@@ -1010,7 +1013,7 @@ function App() {
                                                 alt=""
                                             />
                                         ) : (
-                                            <span className="summary-placeholder">
+                                            <span className="summary-placeholder" aria-hidden="true">
                                                 {selectedSeedArtist.name?.charAt(0)?.toUpperCase() || "?"}
                                             </span>
                                         )}
@@ -1024,6 +1027,7 @@ function App() {
                                                     href={selectedSeedArtist.spotifyUrl}
                                                     target="_blank"
                                                     rel="noreferrer"
+                                                    aria-label={`View on Spotify: ${selectedSeedArtist.name}`}
                                                 >
                                                     View on Spotify ↗
                                                 </a>
@@ -1065,14 +1069,8 @@ function App() {
                                 </div>
 
                                 {uiStage === 4 && (
-                                    <div className="stage-actions">
-                                        <button
-                                            type="button"
-                                            className="button button-back"
-                                            onClick={goBack}
-                                        >
-                                            ← Back
-                                        </button>
+                                    <div className="step-actions">
+                                        <BackButton onClick={goBack} />
 
                                         <button
                                             type="button"
@@ -1080,7 +1078,7 @@ function App() {
                                             onClick={() => setUiStage(5)}
                                             disabled={!playlistName.trim() || !selectedSeedArtist}
                                         >
-                                            Continue →
+                                            Continue<span aria-hidden="true"> →</span>
                                         </button>
                                     </div>
                                 )}
@@ -1089,15 +1087,11 @@ function App() {
 
                         {uiStage >= 5 && (
                             <section className={stageClass(5)}>
-                                <div className="step-heading">
-                                    <div>
-                                        <span className="stage-kicker">STEP 04</span>
-                                        <h2>Shape the discovery</h2>
-                                        <p className="step-description">
-                                            Pick a preset, optionally fine-tune it, then generate.
-                                        </p>
-                                    </div>
-                                </div>
+                                <StepHeading
+                                    eyebrow="Step 04"
+                                    title="Shape the discovery"
+                                    description="Pick a preset, optionally fine-tune it, then generate."
+                                />
 
                                 <div className="preset-grid">
                                     {presets.map((preset) => (
@@ -1128,6 +1122,7 @@ function App() {
                                 <button
                                     type="button"
                                     className="button button-secondary advanced-toggle"
+                                    aria-expanded={advancedOpen}
                                     onClick={() => setAdvancedOpen((current) => !current)}
                                 >
                                     {advancedOpen ? "Hide Advanced Settings" : "Show Advanced Settings"}
@@ -1141,7 +1136,7 @@ function App() {
                                                 id="restrictedArtists"
                                                 value={restrictedArtists}
                                                 onChange={(event) => setRestrictedArtists(event.target.value)}
-                                                placeholder="Artist One, Artist Two"
+                                                placeholder="Coldplay, Imagine Dragons"
                                             />
                                         </div>
 
@@ -1215,14 +1210,8 @@ function App() {
                                     </div>
                                 )}
 
-                                <div className="stage-actions final-actions">
-                                    <button
-                                        type="button"
-                                        className="button button-back"
-                                        onClick={goBack}
-                                    >
-                                        ← Back
-                                    </button>
+                                <div className="step-actions final-actions">
+                                    <BackButton onClick={goBack} />
 
                                     <button
                                         type="submit"
@@ -1233,7 +1222,7 @@ function App() {
                                     </button>
                                 </div>
 
-                                {error && <p className="error">{error}</p>}
+                                {error && <p className="error" role="alert">{error}</p>}
                             </section>
                         )}
                     </form>
@@ -1244,7 +1233,7 @@ function App() {
                 <section className="results-panel" id="playlist-results">
                     <div className="results-header">
                         <div>
-                            <p className="eyebrow">GENERATED PLAYLIST</p>
+                            <p className="eyebrow">Generated playlist</p>
                             <h2>{playlist.playlistName}</h2>
                             <p>
                                 {playlist.tracks.length} tracks · Seeded by {playlist.seedArtist}
@@ -1282,8 +1271,8 @@ function App() {
                         </div>
                     </div>
 
-                    {generationNotice && <p className="notice">{generationNotice}</p>}
-                    {copyMessage && <p className="notice">{copyMessage}</p>}
+                    {generationNotice && <p className="notice" role="status">{generationNotice}</p>}
+                    {copyMessage && <p className="notice" role="status">{copyMessage}</p>}
                     {copyFallback && (
                         <textarea
                             className="copy-fallback"
@@ -1293,11 +1282,11 @@ function App() {
                             onFocus={(event) => event.target.select()}
                         />
                     )}
-                    {createError && <p className="error">{createError}</p>}
-                    {replaceError && <p className="error">{replaceError}</p>}
+                    {createError && <p className="error" role="alert">{createError}</p>}
+                    {replaceError && <p className="error" role="alert">{replaceError}</p>}
 
                     {createdPlaylist && (
-                        <div className="success">
+                        <div className="success" role="status">
                             <strong>{createdPlaylist.status}</strong>
                             <span>{createdPlaylist.playlistName}</span>
                             <span>{createdPlaylist.trackCount} tracks added</span>
@@ -1306,7 +1295,7 @@ function App() {
                                 target="_blank"
                                 rel="noreferrer"
                             >
-                                Open Spotify Playlist ↗
+                                Open Spotify Playlist<span aria-hidden="true"> ↗</span>
                             </a>
                         </div>
                     )}
@@ -1331,6 +1320,7 @@ function App() {
                                         </div>
 
                                         <span className="score-chip">
+                                            <span className="visually-hidden">Score </span>
                                             {Number(item.score).toFixed(1)}
                                         </span>
                                     </div>
@@ -1369,6 +1359,7 @@ function App() {
                                                 href={spotifyUrl}
                                                 target="_blank"
                                                 rel="noreferrer"
+                                                aria-label={`Open in Spotify: ${item.track.name}`}
                                             >
                                                 Open in Spotify ↗
                                             </a>
@@ -1380,6 +1371,7 @@ function App() {
                                                 href={lastFmTrackUrl(item.track)}
                                                 target="_blank"
                                                 rel="noreferrer"
+                                                aria-label={`Last.fm: ${item.track.name}`}
                                             >
                                                 Last.fm ↗
                                             </a>
@@ -1387,7 +1379,8 @@ function App() {
 
                                         <button
                                             type="button"
-                                            className="button button-secondary small-button"
+                                            className="button button-secondary button-small"
+                                            aria-label={`${replacingTrackIndex === index ? "Replacing" : "Replace"} ${item.track.name}`}
                                             onClick={() => replaceTrack(index)}
                                             disabled={replacingTrackIndex !== null}
                                         >
@@ -1396,7 +1389,8 @@ function App() {
 
                                         <button
                                             type="button"
-                                            className="button button-danger small-button"
+                                            className="button button-danger button-small"
+                                            aria-label={`Remove ${item.track.name}`}
                                             onClick={() =>
                                                 removeTrack(
                                                     item.track.id,
@@ -1419,14 +1413,14 @@ function App() {
                 <section className="history-panel">
                     <div className="results-header">
                         <div>
-                            <p className="eyebrow">HISTORY</p>
+                            <p className="eyebrow">History</p>
                             <h2>Playlist History</h2>
                         </div>
 
                         <div className="results-actions">
                             <button
                                 type="button"
-                                className="button button-secondary small-button"
+                                className="button button-secondary button-small"
                                 onClick={fetchPlaylistHistory}
                             >
                                 Refresh
@@ -1434,7 +1428,7 @@ function App() {
 
                             <button
                                 type="button"
-                                className="button button-danger small-button"
+                                className="button button-danger button-small"
                                 onClick={clearPlaylistHistory}
                             >
                                 Clear History
@@ -1442,7 +1436,7 @@ function App() {
                         </div>
                     </div>
 
-                    {historyError && <p className="error">{historyError}</p>}
+                    {historyError && <p className="error" role="alert">{historyError}</p>}
 
                     {visibleHistory.length === 0 ? (
                         <p className="empty-state">No playlists created yet.</p>
@@ -1464,6 +1458,7 @@ function App() {
                                             href={item.spotifyPlaylistUrl}
                                             target="_blank"
                                             rel="noreferrer"
+                                            aria-label={`Open ${item.playlistName} on Spotify`}
                                         >
                                             Open ↗
                                         </a>
@@ -1488,6 +1483,8 @@ function App() {
                     RabbitHole is not affiliated with or endorsed by Spotify or Last.fm.
                 </p>
             </footer>
+
+            <p className="visually-hidden" role="status">{statusMessage}</p>
         </main>
     );
 }

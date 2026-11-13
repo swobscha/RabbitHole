@@ -36,6 +36,7 @@ public class PlaylistGenerationService {
     private static final int MAX_DISCOVERY_ROUNDS = 20;
     private static final int MIN_SPOTIFY_LOOKUP_ATTEMPTS = 60;
     private static final int SPOTIFY_LOOKUP_ATTEMPTS_PER_TRACK = 3;
+    private static final int SPOTIFY_LOOKUP_CONCURRENCY = 5;
 
     private static final int MIN_PLAYLIST_SIZE = 1;
     private static final int MAX_PLAYLIST_SIZE = 50;
@@ -250,7 +251,7 @@ public class PlaylistGenerationService {
                                 stopReason
                         );
 
-                        return Mono.just(result);
+                        return withArtistDetails(result);
                     }
 
                     return generateWithExpansion(
@@ -328,65 +329,22 @@ public class PlaylistGenerationService {
 
         log.debug("Round {} | uniqueCandidates={}", round, uniqueSortedTracks.size());
 
+        // Several lookups run at once, but their results are applied in ranking order,
+        // so the best-ranked matches still win.
         return Flux.fromIterable(uniqueSortedTracks)
-                .concatMap(weightedTrack -> {
-                    if (state.isFull() || state.attemptsRemaining <= 0) {
-                        return Mono.empty();
-                    }
-
-                    String key = trackKey(weightedTrack);
-
-                    if (state.attemptedKeys.contains(key)) {
-                        state.duplicateCandidateSkips++;
-                        return Mono.empty();
-                    }
-
-                    if (state.selectedKeys.contains(key)) {
-                        state.duplicateCandidateSkips++;
-                        return Mono.empty();
-                    }
-
-                    String artistKey = normalizeArtistName(weightedTrack.track().artistName());
-                    int currentArtistCount = state.artistCounts.getOrDefault(artistKey, 0);
-
-                    if (currentArtistCount >= state.maxTracksPerArtist) {
-                        state.artistCapSkips++;
-                        return Mono.empty();
-                    }
-
-                    String requiredSpotifyArtistId = requiredSpotifyArtistIdForCandidate(
-                            request,
-                            weightedTrack.track()
-                    );
-
-                    state.attemptedKeys.add(key);
-                    state.attemptsRemaining--;
-
-                    return spotifyTrackSearchService.findSpotifyUri(
-                                    accessToken,
-                                    weightedTrack.track(),
-                                    requiredSpotifyArtistId
-                            )
-                            .doOnNext(uri -> {
-                                if (state.seenSpotifyUris.contains(uri)) {
-                                    state.duplicateSpotifyUriResults++;
-                                    return;
-                                }
-
-                                WeightedTrack resolvedTrack = withSpotifyUri(weightedTrack, uri);
-
-                                state.selectedTracks.add(resolvedTrack);
-                                state.selectedKeys.add(key);
-                                state.seenSpotifyUris.add(uri);
-                                state.artistCounts.put(artistKey, currentArtistCount + 1);
-                                state.spotifyResolved++;
-                            })
-                            .switchIfEmpty(Mono.defer(() -> {
-                                state.spotifyMissed++;
-                                return Mono.empty();
-                            }))
-                            .then();
-                })
+                .mapNotNull(weightedTrack -> reserveLookup(request, weightedTrack, state))
+                .flatMapSequential(
+                        lookup -> spotifyTrackSearchService.findSpotifyUri(
+                                        accessToken,
+                                        lookup.weightedTrack().track(),
+                                        lookup.requiredSpotifyArtistId()
+                                )
+                                .map(lookup::withSpotifyUri)
+                                .defaultIfEmpty(lookup),
+                        SPOTIFY_LOOKUP_CONCURRENCY
+                )
+                .doOnNext(lookup -> applyLookup(lookup, state))
+                .takeUntil(ignored -> state.isFull())
                 .then(Mono.fromSupplier(() -> {
                     log.debug(
                             "Round {} complete | selected={} | lookupsMade={} | lookupsLeft={} | resolved={} | misses={} | duplicateSpotifyUris={} | artistCapSkips={}",
@@ -408,6 +366,95 @@ public class PlaylistGenerationService {
 
                     return List.copyOf(state.selectedTracks);
                 }));
+    }
+
+    /** Decides whether a candidate is worth a Spotify lookup, and reserves its slot if so. */
+    private SpotifyLookup reserveLookup(
+            PlaylistGenerationRequest request,
+            WeightedTrack weightedTrack,
+            ValidationState state
+    ) {
+        synchronized (state) {
+            if (state.isFull() || state.attemptsRemaining <= 0) {
+                return null;
+            }
+
+            String key = trackKey(weightedTrack);
+
+            if (state.attemptedKeys.contains(key) || state.selectedKeys.contains(key)) {
+                state.duplicateCandidateSkips++;
+                return null;
+            }
+
+            String artistKey = normalizeArtistName(weightedTrack.track().artistName());
+            int artistTracks = state.artistCounts.getOrDefault(artistKey, 0)
+                    + state.pendingArtistLookups.getOrDefault(artistKey, 0);
+
+            if (artistTracks >= state.maxTracksPerArtist) {
+                state.artistCapSkips++;
+                return null;
+            }
+
+            state.attemptedKeys.add(key);
+            state.attemptsRemaining--;
+            state.pendingArtistLookups.merge(artistKey, 1, Integer::sum);
+
+            return new SpotifyLookup(
+                    weightedTrack,
+                    key,
+                    artistKey,
+                    requiredSpotifyArtistIdForCandidate(request, weightedTrack.track()),
+                    null
+            );
+        }
+    }
+
+    private void applyLookup(SpotifyLookup lookup, ValidationState state) {
+        synchronized (state) {
+            state.pendingArtistLookups.merge(lookup.artistKey(), -1, Integer::sum);
+
+            if (lookup.spotifyUri() == null) {
+                state.spotifyMissed++;
+                return;
+            }
+
+            // A lookup that was already running when the playlist filled up.
+            if (state.isFull()) {
+                return;
+            }
+
+            if (state.seenSpotifyUris.contains(lookup.spotifyUri())) {
+                state.duplicateSpotifyUriResults++;
+                return;
+            }
+
+            if (state.artistCounts.getOrDefault(lookup.artistKey(), 0) >= state.maxTracksPerArtist) {
+                state.artistCapSkips++;
+                return;
+            }
+
+            state.selectedTracks.add(withSpotifyUri(lookup.weightedTrack(), lookup.spotifyUri()));
+            state.selectedKeys.add(lookup.key());
+            state.seenSpotifyUris.add(lookup.spotifyUri());
+            state.artistCounts.merge(lookup.artistKey(), 1, Integer::sum);
+            state.spotifyResolved++;
+        }
+    }
+
+    /** Artist listener counts are fetched only for the artists that made the playlist. */
+    private Mono<PlaylistGenerationResult> withArtistDetails(PlaylistGenerationResult result) {
+        Mono<List<WeightedTrack>> tracks = Mono.just(result.tracks());
+
+        for (MusicApiProvider provider : providers) {
+            tracks = tracks.flatMap(provider::addArtistDetails);
+        }
+
+        return tracks
+                .map(detailed -> new PlaylistGenerationResult(result.playlistName(), result.seedArtist(), detailed))
+                .onErrorResume(error -> {
+                    log.warn("Could not add artist details to the playlist: {}", error.getMessage());
+                    return Mono.just(result);
+                });
     }
 
     private void validateGenerationRequest(PlaylistGenerationRequest request) {
@@ -831,6 +878,7 @@ public class PlaylistGenerationService {
         private final Set<String> attemptedKeys = new HashSet<>();
         private final Set<String> seenSpotifyUris = new HashSet<>();
         private final Map<String, Integer> artistCounts = new HashMap<>();
+        private final Map<String, Integer> pendingArtistLookups = new HashMap<>();
 
         private ValidationState(
                 int targetSize,
@@ -849,6 +897,18 @@ public class PlaylistGenerationService {
 
         private int spotifyAttemptsMade() {
             return initialAttempts - attemptsRemaining;
+        }
+    }
+
+    private record SpotifyLookup(
+            WeightedTrack weightedTrack,
+            String key,
+            String artistKey,
+            String requiredSpotifyArtistId,
+            String spotifyUri
+    ) {
+        private SpotifyLookup withSpotifyUri(String uri) {
+            return new SpotifyLookup(weightedTrack, key, artistKey, requiredSpotifyArtistId, uri);
         }
     }
 }

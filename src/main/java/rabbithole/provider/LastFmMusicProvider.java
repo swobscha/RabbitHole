@@ -15,6 +15,7 @@ import reactor.core.publisher.Mono;
 import rabbithole.config.LastFmProperties;
 import rabbithole.model.PlaylistGenerationRequest;
 import rabbithole.model.TrackCandidate;
+import rabbithole.model.WeightedTrack;
 import rabbithole.service.TrackText;
 import tools.jackson.databind.JsonNode;
 
@@ -30,6 +31,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 @Service
 public class LastFmMusicProvider implements MusicApiProvider {
@@ -42,6 +44,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
     private static final int MAX_ARTIST_STAT_LOOKUPS = 600;
     private static final int TRACKS_PER_PAGE = 10;
     private static final int MAX_TAGS = 6;
+    private static final int LASTFM_CONCURRENCY = 8;
 
     private static final int LASTFM_INVALID_PARAMETERS = 6;
     private static final int LASTFM_INVALID_API_KEY = 10;
@@ -54,9 +57,10 @@ public class LastFmMusicProvider implements MusicApiProvider {
     private static final long RECENT_FAILURE_WINDOW_MS = 30_000;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
-    // Last.fm asks for at most 5 requests per second averaged over 5 minutes. Short bursts are fine.
+    // Last.fm's commonly cited guideline is 5 requests per second averaged over 5 minutes, so bursts are
+    // allowed as long as the 5-minute average stays at or under 5 per second.
     private static final long MIN_REQUEST_SPACING_MS = 200;
-    private static final long BURST_WINDOW_MS = 60_000;
+    private static final long BURST_WINDOW_MS = 300_000;
 
     private static final Duration CACHE_LIFETIME = Duration.ofHours(24);
 
@@ -121,7 +125,7 @@ public class LastFmMusicProvider implements MusicApiProvider {
                 .distinct(seed -> seed.name().toLowerCase(Locale.ROOT))
                 .collectList()
                 .flatMapMany(artistSeeds -> selectArtistsToExplore(artistSeeds, request, artistsToExplore))
-                .flatMap(artistSeed -> findTopTracksForArtist(artistSeed, request), 4)
+                .flatMap(artistSeed -> findTopTracksForArtist(artistSeed, request), LASTFM_CONCURRENCY)
                 .distinct(track -> (track.artistName() + "|" + track.name()).toLowerCase(Locale.ROOT))
                 .switchIfEmpty(Flux.defer(this::errorIfLastFmWasUnavailable));
     }
@@ -135,15 +139,65 @@ public class LastFmMusicProvider implements MusicApiProvider {
         if (clamp(request.nicheArtistScale()) > 0) {
             return Flux.fromIterable(artistSeeds)
                     .take(MAX_ARTIST_STAT_LOOKUPS)
-                    .flatMap(this::enrichArtistSeed, 4)
+                    .flatMap(this::enrichArtistSeed, LASTFM_CONCURRENCY)
                     .collectList()
                     .flatMapMany(enriched -> Flux.fromIterable(rankArtists(enriched, request)))
                     .take(artistsToExplore);
         }
 
+        // Listener counts don't affect this ranking, so they're fetched later, only for the chosen tracks.
         return Flux.fromIterable(rankArtists(artistSeeds, request))
-                .take(artistsToExplore)
-                .flatMap(this::enrichArtistSeed, 4);
+                .take(artistsToExplore);
+    }
+
+    @Override
+    public Mono<List<WeightedTrack>> addArtistDetails(List<WeightedTrack> tracks) {
+        Set<String> artistsWithoutDetails = tracks.stream()
+                .map(WeightedTrack::track)
+                .filter(track -> "lastfm".equals(track.sourceApi()))
+                .filter(track -> track.artistListeners() == null && track.artistPlaycount() == null)
+                .map(TrackCandidate::artistName)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        if (artistsWithoutDetails.isEmpty()) {
+            return Mono.just(tracks);
+        }
+
+        return Flux.fromIterable(artistsWithoutDetails)
+                .flatMap(name -> enrichArtistSeed(new ArtistSeed(name, 0, null, null, false, 0)), LASTFM_CONCURRENCY)
+                .collectMap(ArtistSeed::name, seed -> seed)
+                .map(details -> tracks.stream()
+                        .map(weightedTrack -> withArtistDetails(weightedTrack, details.get(weightedTrack.track().artistName())))
+                        .toList());
+    }
+
+    private WeightedTrack withArtistDetails(WeightedTrack weightedTrack, ArtistSeed details) {
+        TrackCandidate track = weightedTrack.track();
+
+        if (details == null || (details.listeners() == null && details.playcount() == null)) {
+            return weightedTrack;
+        }
+
+        return new WeightedTrack(
+                new TrackCandidate(
+                        track.id(),
+                        track.name(),
+                        track.artistName(),
+                        track.artistId(),
+                        track.albumName(),
+                        track.popularity(),
+                        track.genres(),
+                        track.sourceApi(),
+                        track.spotifyUri(),
+                        details.listeners(),
+                        details.playcount(),
+                        track.trackListeners(),
+                        track.trackPlaycount(),
+                        track.artistSimilarity()
+                ),
+                weightedTrack.score(),
+                weightedTrack.reasons()
+        );
     }
 
     private Flux<TrackCandidate> errorIfLastFmWasUnavailable() {

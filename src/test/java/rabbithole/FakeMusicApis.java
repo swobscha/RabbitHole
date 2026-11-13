@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -29,6 +30,9 @@ final class FakeMusicApis {
     final Set<String> revokedRefreshTokens = ConcurrentHashMap.newKeySet();
 
     final AtomicInteger appTokenRequests = new AtomicInteger();
+    final AtomicInteger maxConcurrentTrackSearches = new AtomicInteger();
+
+    private final AtomicInteger concurrentTrackSearches = new AtomicInteger();
 
     volatile boolean failAddingTracks = false;
     volatile boolean rejectLastFmKey = false;
@@ -45,6 +49,8 @@ final class FakeMusicApis {
         server.createContext("/v1/search", this::handleSearch);
         server.createContext("/v1/playlists", this::handleAddItems);
         server.createContext("/lastfm/2.0/", this::handleLastFm);
+        // Handle requests in parallel so the tests can see how many Spotify searches run at once.
+        server.setExecutor(Executors.newCachedThreadPool());
         server.start();
     }
 
@@ -104,16 +110,28 @@ final class FakeMusicApis {
             return;
         }
 
-        Matcher matcher = TRACK_QUERY.matcher(query.get("q"));
+        int running = concurrentTrackSearches.incrementAndGet();
+        maxConcurrentTrackSearches.accumulateAndGet(running, Math::max);
 
-        if (!matcher.matches()) {
-            respond(exchange, 200, "{\"tracks\":{\"items\":[]}}");
-            return;
+        try {
+            // A short delay, like a real network call, so overlapping searches can be observed.
+            Thread.sleep(30);
+
+            Matcher matcher = TRACK_QUERY.matcher(query.get("q"));
+
+            if (!matcher.matches()) {
+                respond(exchange, 200, "{\"tracks\":{\"items\":[]}}");
+                return;
+            }
+
+            respond(exchange, 200, """
+                    {"tracks":{"items":[{"uri":"spotify:track:%s","name":"%s","artists":[{"name":"%s","id":"x"}]}]}}
+                    """.formatted(Integer.toHexString(query.get("q").hashCode()), matcher.group(1), matcher.group(2)));
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        } finally {
+            concurrentTrackSearches.decrementAndGet();
         }
-
-        respond(exchange, 200, """
-                {"tracks":{"items":[{"uri":"spotify:track:%s","name":"%s","artists":[{"name":"%s","id":"x"}]}]}}
-                """.formatted(Integer.toHexString(query.get("q").hashCode()), matcher.group(1), matcher.group(2)));
     }
 
     private void handleCreatePlaylist(HttpExchange exchange) throws IOException {

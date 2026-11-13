@@ -370,11 +370,39 @@ class ApiFlowIntegrationTest {
         int topTracksBefore = FAKE.lastFmCallCount("artist.gettoptracks");
         int trackInfoBefore = FAKE.lastFmCallCount("track.getinfo");
 
-        assertEquals(3, generate(token, seed, 3).tracks().size());
+        int artistInfoBefore = FAKE.lastFmCallCount("artist.getinfo");
+
+        List<WeightedTrack> tracks = generate(token, seed, 3).tracks();
+        assertEquals(3, tracks.size());
 
         // The seed artist plus the three similar artists the fake returns.
         assertEquals(4, FAKE.lastFmCallCount("artist.gettoptracks") - topTracksBefore);
         assertEquals(trackInfoBefore, FAKE.lastFmCallCount("track.getinfo"));
+
+        // Listener counts are looked up only for the artists that made the playlist, and still shown.
+        long chosenArtists = tracks.stream().map(track -> track.track().artistName()).distinct().count();
+        assertEquals(chosenArtists, FAKE.lastFmCallCount("artist.getinfo") - artistInfoBefore);
+        assertTrue(tracks.stream().allMatch(track -> track.track().artistListeners() != null));
+    }
+
+    @Test
+    void spotifyLookupsRunInParallelButKeepRankingOrder() {
+        String seed = "Parallel " + uniqueCode();
+        String token = login(uniqueCode());
+
+        FAKE.maxConcurrentTrackSearches.set(0);
+
+        List<WeightedTrack> tracks = generate(token, seed, 10).tracks();
+
+        assertEquals(10, tracks.size());
+
+        int maxConcurrent = FAKE.maxConcurrentTrackSearches.get();
+        assertTrue(maxConcurrent > 1, "lookups ran one at a time");
+        assertTrue(maxConcurrent <= 5, "more than 5 lookups ran at once: " + maxConcurrent);
+
+        for (int i = 1; i < tracks.size(); i++) {
+            assertTrue(tracks.get(i - 1).score() >= tracks.get(i).score(), "tracks are out of ranking order");
+        }
     }
 
     @Test

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 const LOCAL_API_BASE_URL = "http://localhost:8080";
-const PRODUCTION_API_BASE_URL = "https://spotify-bot-giik.onrender.com";
+const PRODUCTION_API_BASE_URL = "https://rabbithole-api.samwobschall.dev";
 
 const isLocalFrontend =
     window.location.hostname === "localhost" ||

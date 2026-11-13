@@ -4,6 +4,8 @@
 
 *One artist in. Hours of music out.*
 
+**Try it live: [rabbithole.samwobschall.dev](https://rabbithole.samwobschall.dev)**
+
 RabbitHole builds Spotify playlists of new music from an artist you choose. You pick a seed artist, choose how
 popular or obscure and how similar or different the songs should be, and RabbitHole finds matching tracks and
 creates the playlist on your Spotify account.

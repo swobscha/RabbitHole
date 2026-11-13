@@ -11,6 +11,7 @@ import tools.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 public class SpotifyArtistSearchService {
@@ -30,12 +31,12 @@ public class SpotifyArtistSearchService {
                 .build();
     }
 
-    public Mono<List<SpotifyArtistSearchResult>> searchArtists(SpotifySession session, String query) {
+    public Mono<List<SpotifyArtistSearchResult>> searchArtists(Optional<SpotifySession> session, String query) {
         if (query == null || query.isBlank()) {
             return Mono.just(List.of());
         }
 
-        return spotifyAuthService.getValidAccessToken(session)
+        return spotifyAuthService.getAccessToken(session)
                 .flatMap(accessToken ->
                         webClient.get()
                                 .uri(uriBuilder -> uriBuilder

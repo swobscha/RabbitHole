@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 @Service
@@ -38,6 +39,7 @@ public class SpotifyAuthService {
 
     private final SpotifySessionStore sessionStore;
     private final PlaylistHistoryService playlistHistoryService;
+    private final SpotifyAppTokenService spotifyAppTokenService;
     private final WebClient accountsWebClient;
     private final WebClient apiWebClient;
     private final String authorizeUrl;
@@ -60,11 +62,13 @@ public class SpotifyAuthService {
     public SpotifyAuthService(
             SpotifySessionStore sessionStore,
             PlaylistHistoryService playlistHistoryService,
+            SpotifyAppTokenService spotifyAppTokenService,
             @Value("${SPOTIFY_ACCOUNTS_URL:https://accounts.spotify.com}") String accountsUrl,
             @Value("${SPOTIFY_API_URL:https://api.spotify.com/v1}") String apiUrl
     ) {
         this.sessionStore = sessionStore;
         this.playlistHistoryService = playlistHistoryService;
+        this.spotifyAppTokenService = spotifyAppTokenService;
         this.accountsWebClient = WebClient.builder().baseUrl(accountsUrl).build();
         this.apiWebClient = WebClient.builder().baseUrl(apiUrl).build();
         this.authorizeUrl = accountsUrl + "/authorize";
@@ -129,6 +133,11 @@ public class SpotifyAuthService {
     public Mono<SpotifySession> requireSession(String authorizationHeader) {
         return findSession(authorizationHeader)
                 .switchIfEmpty(Mono.error(this::notConnected));
+    }
+
+    /** The user's token when logged in, otherwise an app-only token that can search but not touch any account. */
+    public Mono<String> getAccessToken(Optional<SpotifySession> session) {
+        return session.map(this::getValidAccessToken).orElseGet(spotifyAppTokenService::getToken);
     }
 
     public Mono<String> getValidAccessToken(SpotifySession session) {

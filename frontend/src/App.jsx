@@ -107,7 +107,7 @@ function App() {
     const [spotifyConnected, setSpotifyConnected] = useState(false);
     const [loginError, setLoginError] = useState(initialLoginError);
     const [wizardStage, setUiStage] = useState(2);
-    const uiStage = spotifyConnected ? wizardStage : 1;
+    const uiStage = wizardStage;
 
     const [seedArtistOptions, setSeedArtistOptions] = useState([]);
     const [selectedSeedArtist, setSelectedSeedArtist] = useState(null);
@@ -129,6 +129,8 @@ function App() {
     const [replaceError, setReplaceError] = useState("");
     const [historyError, setHistoryError] = useState("");
     const [generationNotice, setGenerationNotice] = useState("");
+    const [copyMessage, setCopyMessage] = useState("");
+    const [copyFallback, setCopyFallback] = useState("");
 
     const hiddenNicheArtistScale = 0;
 
@@ -187,7 +189,8 @@ function App() {
 
         const response = await fetch(apiUrl(path), { ...options, headers });
 
-        if (response.status === 401) {
+        // Only someone who was logged in can lose a connection; logged-out features never return 401.
+        if (response.status === 401 && token) {
             writeSessionToken("");
             setSpotifyConnected(false);
             setLoginError("Your Spotify connection ended. Connect again to continue.");
@@ -349,7 +352,7 @@ function App() {
             preferredGenres: splitInput(preferredGenres),
             randomness: Number(randomness),
             generationSeed: createGenerationSeed(),
-            avoidUsedTracks,
+            avoidUsedTracks: spotifyConnected && avoidUsedTracks,
             nicheArtistScale: hiddenNicheArtistScale,
             nicheSongScale: Number(popularityScale),
             similarityScale: Number(similarityScale),
@@ -374,7 +377,7 @@ function App() {
         setPlaylist(null);
         setCreatedPlaylist(null);
         setLastGenerationRequest(null);
-        setUiStage(spotifyConnected ? 2 : 1);
+        setUiStage(2);
     }
 
     // A failed check says nothing about the connection, so it leaves the current state alone.
@@ -448,11 +451,6 @@ function App() {
     async function searchSeedArtists() {
         if (!seedArtist.trim()) {
             setArtistSearchError("Enter a seed artist first.");
-            return;
-        }
-
-        if (!spotifyConnected) {
-            setArtistSearchError("Connect Spotify before searching artist matches.");
             return;
         }
 
@@ -542,11 +540,6 @@ function App() {
     async function generatePlaylist(event) {
         event.preventDefault();
 
-        if (!spotifyConnected) {
-            setError("Spotify is not connected. Click Connect Spotify before generating.");
-            return;
-        }
-
         if (!selectedSeedArtist) {
             setError("Search and select the correct Spotify seed artist before generating.");
             return;
@@ -557,6 +550,7 @@ function App() {
         setCreateError("");
         setReplaceError("");
         setGenerationNotice("");
+        resetCopy();
         setPlaylist(null);
         setCreatedPlaylist(null);
 
@@ -604,11 +598,6 @@ function App() {
             return;
         }
 
-        if (!spotifyConnected) {
-            setReplaceError("Spotify is not connected.");
-            return;
-        }
-
         setReplacingTrackIndex(indexToReplace);
         setReplaceError("");
         setCreatedPlaylist(null);
@@ -640,6 +629,7 @@ function App() {
                 ...playlist,
                 tracks: updatedTracks,
             });
+            resetCopy();
         } catch (err) {
             setReplaceError(messageFromError(err, "Could not replace track."));
         } finally {
@@ -716,6 +706,7 @@ function App() {
         });
 
         setCreatedPlaylist(null);
+        resetCopy();
     }
 
     function clearPlaylist() {
@@ -724,11 +715,62 @@ function App() {
         setCreateError("");
         setReplaceError("");
         setGenerationNotice("");
+        resetCopy();
     }
 
+    function resetCopy() {
+        setCopyMessage("");
+        setCopyFallback("");
+    }
+
+    // Works without a login: Spotify's desktop app accepts pasted track links into a playlist.
+    async function copySpotifyLinks() {
+        const links = playlist.tracks.map((item) => spotifyTrackUrl(item.track)).filter(Boolean);
+
+        if (links.length === 0) {
+            setCopyMessage("These tracks have no Spotify links to copy.");
+            return;
+        }
+
+        const text = links.join("\n");
+
+        if (await copyText(text)) {
+            setCopyFallback("");
+            setCopyMessage(
+                `Copied ${links.length} links. In the Spotify desktop app, open a playlist and press Ctrl+V (⌘V on a Mac).`
+            );
+        } else {
+            setCopyFallback(text);
+            setCopyMessage("Your browser blocked copying. Select the links below, copy them, and paste them into a Spotify playlist.");
+        }
+    }
+
+    // The Clipboard API can be blocked (for example inside embedded browsers), so fall back to the older copy command.
+    async function copyText(text) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch {
+            const scratch = document.createElement("textarea");
+            scratch.value = text;
+            scratch.setAttribute("readonly", "");
+            scratch.style.position = "fixed";
+            scratch.style.opacity = "0";
+            document.body.appendChild(scratch);
+            scratch.select();
+
+            try {
+                return document.execCommand("copy");
+            } catch {
+                return false;
+            } finally {
+                scratch.remove();
+            }
+        }
+    }
 
     function goBack() {
-        setUiStage((current) => Math.max(1, current - 1));
+        setUiStage((current) => Math.max(2, current - 1));
     }
 
     function selectSeedArtist(artist) {
@@ -763,46 +805,43 @@ function App() {
             </header>
 
             <div className="wizard">
-                <section className={stageClass(1)}>
+                <section className="wizard-step account-step">
                     <div className="step-heading">
                         <div>
-                            <span className="stage-kicker">STEP 01</span>
+                            <span className="stage-kicker">OPTIONAL</span>
                             <h2>Connect Spotify</h2>
-                            <p className="step-description">
-                                Start by connecting the Spotify account that will receive the playlist.
-                            </p>
                         </div>
 
-                        {uiStage > 1 && <span className="step-complete">Connected</span>}
+                        {spotifyConnected && <span className="step-complete">Connected</span>}
                     </div>
 
-                    <button
-                        type="button"
-                        className={`button spotify-button ${
-                            spotifyConnected ? "spotify-connected" : "spotify-disconnected"
-                        }`}
-                        onClick={() => {
-                            if (spotifyConnected) {
-                                setUiStage(2);
-                            } else {
-                                connectSpotify();
-                            }
-                        }}
-                    >
-                        <span className="spotify-button-text">
-                            {spotifyConnected ? "Spotify Connected — Continue" : "Connect Spotify"}
-                        </span>
+                    <ul className="mode-compare">
+                        <li>
+                            <strong>Without connecting:</strong> build a playlist, then copy the song links and
+                            paste them into a playlist in the Spotify desktop app.
+                        </li>
+                        <li>
+                            <strong>Connected:</strong> RabbitHole creates the playlist on your account in one
+                            click and skips songs you've used before. Approved accounts only for now.
+                        </li>
+                    </ul>
 
-                        <span className="spotify-hover-icon" aria-hidden="true">♪</span>
-                    </button>
-
-                    {spotifyConnected && (
+                    {spotifyConnected ? (
                         <button
                             type="button"
                             className="button button-secondary small-button disconnect-button"
                             onClick={disconnectSpotify}
                         >
                             Disconnect
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            className="button spotify-button spotify-disconnected"
+                            onClick={connectSpotify}
+                        >
+                            <span className="spotify-button-text">Connect Spotify</span>
+                            <span className="spotify-hover-icon" aria-hidden="true">♪</span>
                         </button>
                     )}
 
@@ -814,7 +853,7 @@ function App() {
                         <section className={stageClass(2)}>
                             <div className="step-heading">
                                 <div>
-                                    <span className="stage-kicker">STEP 02</span>
+                                    <span className="stage-kicker">STEP 01</span>
                                     <h2>Find your seed artist</h2>
                                     <p className="step-description">
                                         Search Spotify so the generator knows exactly which artist you mean.
@@ -839,21 +878,11 @@ function App() {
                             </div>
 
                             <div className="stage-actions">
-                                {uiStage === 2 && (
-                                    <button
-                                        type="button"
-                                        className="button button-back"
-                                        onClick={goBack}
-                                    >
-                                        ← Back
-                                    </button>
-                                )}
-
                                 <button
                                     type="button"
                                     className="button button-primary search-button"
                                     onClick={searchSeedArtists}
-                                    disabled={artistSearchLoading || !spotifyConnected}
+                                    disabled={artistSearchLoading}
                                 >
                                     {artistSearchLoading ? "Searching..." : "Find Matching Artists"}
                                 </button>
@@ -868,7 +897,7 @@ function App() {
                             <section className={stageClass(3)}>
                                 <div className="step-heading">
                                     <div>
-                                        <span className="stage-kicker">STEP 03</span>
+                                        <span className="stage-kicker">STEP 02</span>
                                         <h2>Choose the right artist</h2>
                                         <p className="step-description">
                                             Pick one of the five Spotify matches. The selected artist becomes the seed.
@@ -959,7 +988,7 @@ function App() {
                             <section className={stageClass(4)}>
                                 <div className="step-heading">
                                     <div>
-                                        <span className="stage-kicker">STEP 04</span>
+                                        <span className="stage-kicker">STEP 03</span>
                                         <h2>Name and size</h2>
                                         <p className="step-description">
                                             Give the playlist a name and choose how many songs you want.
@@ -1062,7 +1091,7 @@ function App() {
                             <section className={stageClass(5)}>
                                 <div className="step-heading">
                                     <div>
-                                        <span className="stage-kicker">STEP 05</span>
+                                        <span className="stage-kicker">STEP 04</span>
                                         <h2>Shape the discovery</h2>
                                         <p className="step-description">
                                             Pick a preset, optionally fine-tune it, then generate.
@@ -1085,14 +1114,16 @@ function App() {
                                     ))}
                                 </div>
 
-                                <label className="checkbox-row">
-                                    <input
-                                        type="checkbox"
-                                        checked={avoidUsedTracks}
-                                        onChange={(event) => setAvoidUsedTracks(event.target.checked)}
-                                    />
-                                    <span>Avoid songs already used</span>
-                                </label>
+                                {spotifyConnected && (
+                                    <label className="checkbox-row">
+                                        <input
+                                            type="checkbox"
+                                            checked={avoidUsedTracks}
+                                            onChange={(event) => setAvoidUsedTracks(event.target.checked)}
+                                        />
+                                        <span>Skip songs I've already used</span>
+                                    </label>
+                                )}
 
                                 <button
                                     type="button"
@@ -1196,7 +1227,7 @@ function App() {
                                     <button
                                         type="submit"
                                         className="button button-primary generate-button"
-                                        disabled={loading || !spotifyConnected || !selectedSeedArtist}
+                                        disabled={loading || !selectedSeedArtist}
                                     >
                                         {loading ? "Generating..." : "Generate Playlist"}
                                     </button>
@@ -1223,12 +1254,23 @@ function App() {
                         <div className="results-actions">
                             <button
                                 type="button"
-                                className="button button-primary"
-                                onClick={createPlaylist}
-                                disabled={creating || playlist.tracks.length === 0 || !spotifyConnected}
+                                className={`button ${spotifyConnected ? "button-secondary" : "button-primary"}`}
+                                onClick={copySpotifyLinks}
+                                disabled={playlist.tracks.length === 0}
                             >
-                                {creating ? "Creating..." : "Create on Spotify"}
+                                Copy Spotify links
                             </button>
+
+                            {spotifyConnected && (
+                                <button
+                                    type="button"
+                                    className="button button-primary"
+                                    onClick={createPlaylist}
+                                    disabled={creating || playlist.tracks.length === 0}
+                                >
+                                    {creating ? "Creating..." : "Create on Spotify"}
+                                </button>
+                            )}
 
                             <button
                                 type="button"
@@ -1241,6 +1283,16 @@ function App() {
                     </div>
 
                     {generationNotice && <p className="notice">{generationNotice}</p>}
+                    {copyMessage && <p className="notice">{copyMessage}</p>}
+                    {copyFallback && (
+                        <textarea
+                            className="copy-fallback"
+                            readOnly
+                            rows={6}
+                            value={copyFallback}
+                            onFocus={(event) => event.target.select()}
+                        />
+                    )}
                     {createError && <p className="error">{createError}</p>}
                     {replaceError && <p className="error">{replaceError}</p>}
 
@@ -1363,64 +1415,65 @@ function App() {
                 </section>
             )}
 
-            <section className="history-panel">
-                <div className="results-header">
-                    <div>
-                        <p className="eyebrow">HISTORY</p>
-                        <h2>Playlist History</h2>
+            {spotifyConnected && (
+                <section className="history-panel">
+                    <div className="results-header">
+                        <div>
+                            <p className="eyebrow">HISTORY</p>
+                            <h2>Playlist History</h2>
+                        </div>
+
+                        <div className="results-actions">
+                            <button
+                                type="button"
+                                className="button button-secondary small-button"
+                                onClick={fetchPlaylistHistory}
+                            >
+                                Refresh
+                            </button>
+
+                            <button
+                                type="button"
+                                className="button button-danger small-button"
+                                onClick={clearPlaylistHistory}
+                            >
+                                Clear History
+                            </button>
+                        </div>
                     </div>
 
-                    <div className="results-actions">
-                        <button
-                            type="button"
-                            className="button button-secondary small-button"
-                            onClick={fetchPlaylistHistory}
-                        >
-                            Refresh
-                        </button>
+                    {historyError && <p className="error">{historyError}</p>}
 
-                        <button
-                            type="button"
-                            className="button button-danger small-button"
-                            onClick={clearPlaylistHistory}
-                            disabled={!spotifyConnected}
-                        >
-                            Clear History
-                        </button>
-                    </div>
-                </div>
+                    {visibleHistory.length === 0 ? (
+                        <p className="empty-state">No playlists created yet.</p>
+                    ) : (
+                        <ul className="history-list">
+                            {visibleHistory.map((item) => (
+                                <li key={item.id}>
+                                    <div>
+                                        <strong>{item.playlistName}</strong>
+                                        <span>
+                                            {item.trackCount} tracks · {item.seedArtist || "Unknown seed"}
+                                        </span>
+                                    </div>
 
-                {historyError && <p className="error">{historyError}</p>}
-
-                {visibleHistory.length === 0 ? (
-                    <p className="empty-state">No playlists created yet.</p>
-                ) : (
-                    <ul className="history-list">
-                        {visibleHistory.map((item) => (
-                            <li key={item.id}>
-                                <div>
-                                    <strong>{item.playlistName}</strong>
-                                    <span>
-                                        {item.trackCount} tracks · {item.seedArtist || "Unknown seed"}
-                                    </span>
-                                </div>
-
-                                <div>
-                                    <span>{new Date(item.createdAt).toLocaleString()}</span>
-                                    <a
-                                        className="text-link"
-                                        href={item.spotifyPlaylistUrl}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                    >
-                                        Open ↗
-                                    </a>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </section>
+                                    <div>
+                                        <span>{new Date(item.createdAt).toLocaleString()}</span>
+                                        <a
+                                            className="text-link"
+                                            href={item.spotifyPlaylistUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                        >
+                                            Open ↗
+                                        </a>
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </section>
+            )}
 
             <footer className="app-footer">
                 <p>

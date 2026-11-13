@@ -10,6 +10,8 @@ import rabbithole.model.PlaylistReplaceTrackResult;
 import rabbithole.model.SpotifySession;
 import rabbithole.service.PlaylistGenerationService;
 
+import java.util.Optional;
+
 @RestController
 @RequestMapping("/api/playlists")
 public class PlaylistReplacementController {
@@ -22,7 +24,7 @@ public class PlaylistReplacementController {
 
     @PostMapping("/replace-track")
     public Mono<PlaylistReplaceTrackResult> replaceTrack(
-            SpotifySession session,
+            Optional<SpotifySession> session,
             @RequestBody PlaylistReplaceTrackRequest request
     ) {
         return playlistGenerationService.replaceTrack(session, request)

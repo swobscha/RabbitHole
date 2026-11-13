@@ -10,6 +10,7 @@ import rabbithole.model.SpotifySession;
 import rabbithole.service.SpotifyArtistSearchService;
 
 import java.util.List;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/spotify/artists")
@@ -23,7 +24,7 @@ public class SpotifyArtistController {
 
     @GetMapping("/search")
     public Mono<List<SpotifyArtistSearchResult>> searchArtists(
-            SpotifySession session,
+            Optional<SpotifySession> session,
             @RequestParam String query
     ) {
         return spotifyArtistSearchService.searchArtists(session, query);

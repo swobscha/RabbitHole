@@ -17,7 +17,19 @@ RabbitHole is not affiliated with or endorsed by Spotify or Last.fm.
 2. **Rank.** Every candidate track is scored using your settings: popularity, similarity to the seed, preferred
    artists and genres, and randomness. Songs you have already used can be skipped.
 3. **Match.** The best-scoring tracks are looked up on Spotify, and only confident matches are kept.
-4. **Create.** You can replace or remove tracks, then create the playlist on Spotify as a private playlist.
+4. **Create.** You can replace or remove tracks, then get the playlist into Spotify one of two ways.
+
+### Two ways to use it
+
+| | Without logging in | Connected to Spotify |
+|---|---|---|
+| Build, tweak and preview playlists | Yes | Yes |
+| Get the playlist into Spotify | Copy the song links and paste them into a playlist in the Spotify desktop app | Created on your account in one click |
+| Skip songs you've used before | No | Yes |
+| Who can use it | Anyone | Up to 5 approved accounts, while the Spotify app is in development mode |
+
+Logged-out searches use an app-only Spotify token (the client credentials flow), which can search the catalog but
+can't read or change any account.
 
 ## Tech stack
 
@@ -153,9 +165,9 @@ On a free hosting plan that sleeps when idle, a request to `/ping` every 5 to 10
 | `GET` | `/api/spotify/callback` | no | Spotify login callback |
 | `GET` | `/api/spotify/status` | no | Whether the current session is connected |
 | `POST` | `/api/spotify/logout` | yes | Disconnects and deletes the account's data |
-| `GET` | `/api/spotify/artists/search?query=` | yes | Finds Spotify artists for the seed |
-| `POST` | `/api/playlists/generate` | yes | Generates a playlist |
-| `POST` | `/api/playlists/replace-track` | yes | Finds a fresh replacement for one track |
+| `GET` | `/api/spotify/artists/search?query=` | optional | Finds Spotify artists for the seed |
+| `POST` | `/api/playlists/generate` | optional | Generates a playlist; skipping used songs needs a login |
+| `POST` | `/api/playlists/replace-track` | optional | Finds a fresh replacement for one track |
 | `POST` | `/api/playlists/create` | yes | Creates the playlist on Spotify |
 | `GET` | `/api/playlists/history` | yes | Lists playlists you created |
 | `DELETE` | `/api/playlists/history` | yes | Clears your history |

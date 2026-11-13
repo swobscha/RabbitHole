@@ -22,6 +22,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -71,7 +72,7 @@ public class PlaylistGenerationService {
     }
 
     public Mono<PlaylistGenerationResult> generatePlaylist(
-            SpotifySession session,
+            Optional<SpotifySession> session,
             PlaylistGenerationRequest request
     ) {
         validateGenerationRequest(request);
@@ -89,7 +90,7 @@ public class PlaylistGenerationService {
                 request.avoidUsedTracks()
         );
 
-        return spotifyAuthService.getValidAccessToken(session)
+        return spotifyAuthService.getAccessToken(session)
                 .flatMap(accessToken ->
                         loadUsedTrackKeys(session, request)
                                 .flatMap(usedTrackKeys -> {
@@ -117,7 +118,7 @@ public class PlaylistGenerationService {
                 );
     }
 
-    public Mono<WeightedTrack> replaceTrack(SpotifySession session, PlaylistReplaceTrackRequest request) {
+    public Mono<WeightedTrack> replaceTrack(Optional<SpotifySession> session, PlaylistReplaceTrackRequest request) {
         validateReplaceTrackRequest(request);
 
         PlaylistGenerationRequest original = request.generationRequest();
@@ -153,7 +154,7 @@ public class PlaylistGenerationService {
 
         blockCurrentTracks(state, request);
 
-        return spotifyAuthService.getValidAccessToken(session)
+        return spotifyAuthService.getAccessToken(session)
                 .flatMap(accessToken ->
                         loadUsedTrackKeys(session, replacementRequest)
                                 .flatMap(usedTrackKeys -> generateWithExpansion(
@@ -772,12 +773,13 @@ public class PlaylistGenerationService {
         );
     }
 
-    private Mono<Set<String>> loadUsedTrackKeys(SpotifySession session, PlaylistGenerationRequest request) {
-        if (!request.avoidUsedTracks()) {
+    /** Skipping used songs needs an account to remember them, so it only applies when logged in. */
+    private Mono<Set<String>> loadUsedTrackKeys(Optional<SpotifySession> session, PlaylistGenerationRequest request) {
+        if (!request.avoidUsedTracks() || session.isEmpty()) {
             return Mono.just(Set.of());
         }
 
-        return playlistHistoryService.getUsedTrackKeys(session.spotifyUserId())
+        return playlistHistoryService.getUsedTrackKeys(session.get().spotifyUserId())
                 .collect(Collectors.toSet());
     }
 

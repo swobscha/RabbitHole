@@ -209,33 +209,64 @@ class ApiFlowIntegrationTest {
     }
 
     @Test
-    void protectedEndpointsRejectRequestsWithoutASession() {
+    void accountEndpointsRejectRequestsWithoutASession() {
         client().get().uri("/api/playlists/history").exchange().expectStatus().isUnauthorized();
         client().delete().uri("/api/playlists/history").exchange().expectStatus().isUnauthorized();
         client().get().uri("/api/playlists/demo").exchange().expectStatus().isUnauthorized();
-        client().get().uri("/api/spotify/artists/search?query=x").exchange().expectStatus().isUnauthorized();
 
-        client().post().uri("/api/playlists/generate")
-                .bodyValue(generationRequest("A", 1))
+        client().post().uri("/api/playlists/create")
+                .bodyValue(Map.of("playlistName", "Mix"))
                 .exchange()
                 .expectStatus().isUnauthorized()
                 .expectBody()
                 .jsonPath("$.message").isEqualTo("Spotify is not connected. Connect Spotify and try again.");
 
-        client().post().uri("/api/playlists/create")
-                .bodyValue(Map.of("playlistName", "Mix"))
-                .exchange()
-                .expectStatus().isUnauthorized();
-
-        client().post().uri("/api/playlists/replace-track")
-                .bodyValue(Map.of())
-                .exchange()
-                .expectStatus().isUnauthorized();
-
         client().get().uri("/api/playlists/history")
                 .header("Authorization", "Bearer " + "x".repeat(43))
                 .exchange()
                 .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void loggedOutVisitorsCanSearchGenerateAndReplace() {
+        String seed = "Visitor " + uniqueCode();
+        int appTokensBefore = FAKE.appTokenRequests.get();
+
+        client().get().uri(builder -> builder.path("/api/spotify/artists/search").queryParam("query", seed).build())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].name").isEqualTo(seed);
+
+        Map<String, Object> request = generationRequest(seed, 3);
+
+        List<WeightedTrack> tracks = client().post().uri("/api/playlists/generate")
+                .bodyValue(request)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(PlaylistGenerationResult.class)
+                .returnResult()
+                .getResponseBody()
+                .tracks();
+
+        assertEquals(3, tracks.size());
+
+        PlaylistReplaceTrackResult replacement = client().post().uri("/api/playlists/replace-track")
+                .bodyValue(Map.of(
+                        "generationRequest", request,
+                        "currentTracks", tracks,
+                        "trackToReplace", tracks.get(0)
+                ))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(PlaylistReplaceTrackResult.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertFalse(uris(tracks).contains(replacement.replacementTrack().track().spotifyUri()));
+
+        // One app-only token is fetched at most and then reused.
+        assertTrue(FAKE.appTokenRequests.get() - appTokensBefore <= 1);
     }
 
     @Test

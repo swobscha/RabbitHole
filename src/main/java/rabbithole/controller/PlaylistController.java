@@ -18,6 +18,7 @@ import rabbithole.service.PlaylistHistoryService;
 import rabbithole.service.SpotifyPlaylistService;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @RestController
@@ -40,7 +41,7 @@ public class PlaylistController {
 
     @PostMapping("/generate")
     public Mono<PlaylistGenerationResult> generatePlaylist(
-            SpotifySession session,
+            Optional<SpotifySession> session,
             @RequestBody PlaylistGenerationRequest request
     ) {
         return playlistGenerationService.generatePlaylist(session, request);
@@ -83,6 +84,6 @@ public class PlaylistController {
                 100
         );
 
-        return playlistGenerationService.generatePlaylist(session, request);
+        return playlistGenerationService.generatePlaylist(Optional.of(session), request);
     }
 }

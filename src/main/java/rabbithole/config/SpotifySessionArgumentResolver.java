@@ -10,7 +10,12 @@ import reactor.core.publisher.Mono;
 import rabbithole.model.SpotifySession;
 import rabbithole.service.SpotifyAuthService;
 
-/** Lets a controller take a {@link SpotifySession} parameter; requests without one get a 401. */
+import java.util.Optional;
+
+/**
+ * Lets a controller take a {@link SpotifySession} parameter, where requests without a login get a
+ * 401, or an {@code Optional<SpotifySession>} parameter for endpoints that also work logged out.
+ */
 @Component
 public class SpotifySessionArgumentResolver implements HandlerMethodArgumentResolver {
 
@@ -22,7 +27,7 @@ public class SpotifySessionArgumentResolver implements HandlerMethodArgumentReso
 
     @Override
     public boolean supportsParameter(MethodParameter parameter) {
-        return SpotifySession.class.equals(parameter.getParameterType());
+        return SpotifySession.class.equals(parameter.nestedIfOptional().getNestedParameterType());
     }
 
     @Override
@@ -32,6 +37,13 @@ public class SpotifySessionArgumentResolver implements HandlerMethodArgumentReso
             ServerWebExchange exchange
     ) {
         String authorization = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+
+        if (Optional.class.equals(parameter.getParameterType())) {
+            return spotifyAuthService.findSession(authorization)
+                    .map(Optional::of)
+                    .defaultIfEmpty(Optional.empty())
+                    .cast(Object.class);
+        }
 
         return spotifyAuthService.requireSession(authorization).cast(Object.class);
     }

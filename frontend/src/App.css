@@ -739,6 +739,34 @@ input[type="range"]:hover::-moz-range-thumb {
   margin-top: 10px;
 }
 
+.mode-compare {
+  margin: 4px 0 14px;
+  padding-left: 18px;
+  color: var(--muted-2);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.mode-compare li + li {
+  margin-top: 6px;
+}
+
+.mode-compare strong {
+  color: var(--text);
+}
+
+.copy-fallback {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.3);
+  font: 0.75rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  resize: vertical;
+}
+
 .selected-artist-summary .text-link {
   display: block;
   margin-top: 2px;

@@ -28,6 +28,8 @@ final class FakeMusicApis {
     final List<String> libraryRemovals = new CopyOnWriteArrayList<>();
     final Set<String> revokedRefreshTokens = ConcurrentHashMap.newKeySet();
 
+    final AtomicInteger appTokenRequests = new AtomicInteger();
+
     volatile boolean failAddingTracks = false;
     volatile boolean rejectLastFmKey = false;
 
@@ -57,6 +59,12 @@ final class FakeMusicApis {
 
     private void handleToken(HttpExchange exchange) throws IOException {
         Map<String, String> form = parseQuery(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+
+        if ("client_credentials".equals(form.get("grant_type"))) {
+            appTokenRequests.incrementAndGet();
+            respond(exchange, 200, "{\"access_token\":\"app-token\",\"expires_in\":3600}");
+            return;
+        }
 
         if ("authorization_code".equals(form.get("grant_type"))) {
             String code = form.get("code");

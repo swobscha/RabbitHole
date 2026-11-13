@@ -1,6 +1,6 @@
 # RabbitHole
 
-[![CI](https://github.com/swobscha/spotify-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/swobscha/spotify-bot/actions/workflows/ci.yml)
+[![CI](https://github.com/swobscha/rabbithole/actions/workflows/ci.yml/badge.svg)](https://github.com/swobscha/rabbithole/actions/workflows/ci.yml)
 
 *One artist in. Hours of music out.*
 

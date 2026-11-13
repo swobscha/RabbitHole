@@ -90,6 +90,48 @@ function createGenerationSeed() {
     return `${Date.now()}-${Math.random()}`;
 }
 
+// Slider positions before a preset is picked, and again after a preset is switched off.
+// Popularity runs from 0 (most obscure) to 1 (most popular).
+const DEFAULT_SETTINGS = { popularity: 0.5, similarityScale: 0.5, randomness: 0.7 };
+
+const PRESETS = [
+    {
+        name: "Deep Cuts",
+        description: "Obscure songs, balanced distance",
+        popularity: 0.1,
+        similarityScale: 0.5,
+        randomness: 0.35,
+    },
+    {
+        name: "Nearby Underground",
+        description: "Obscure songs close to seed",
+        popularity: 0.1,
+        similarityScale: 0.8,
+        randomness: 0.3,
+    },
+    {
+        name: "Popular Similar",
+        description: "Bigger songs close to seed",
+        popularity: 0.85,
+        similarityScale: 0.85,
+        randomness: 0.2,
+    },
+    {
+        name: "Far Discovery",
+        description: "Obscure songs farther away",
+        popularity: 0.2,
+        similarityScale: 0.15,
+        randomness: 0.45,
+    },
+    {
+        name: "Chaos Mode",
+        description: "Balanced streams, high randomness",
+        popularity: 0.5,
+        similarityScale: 0.5,
+        randomness: 1,
+    },
+];
+
 function StepHeading({ eyebrow, title, description, badge }) {
     return (
         <div className="step-heading">
@@ -120,10 +162,10 @@ function App() {
     const [preferredArtists, setPreferredArtists] = useState("");
     const [preferredGenres, setPreferredGenres] = useState("");
 
-    const [randomness, setRandomness] = useState(0.7);
+    const [randomness, setRandomness] = useState(DEFAULT_SETTINGS.randomness);
     const [avoidUsedTracks, setAvoidUsedTracks] = useState(true);
-    const [popularityScale, setPopularityScale] = useState(0.5);
-    const [similarityScale, setSimilarityScale] = useState(0.5);
+    const [popularity, setPopularity] = useState(DEFAULT_SETTINGS.popularity);
+    const [similarityScale, setSimilarityScale] = useState(DEFAULT_SETTINGS.similarityScale);
     const [advancedOpen, setAdvancedOpen] = useState(false);
 
     const [spotifyConnected, setSpotifyConnected] = useState(false);
@@ -156,43 +198,12 @@ function App() {
 
     const hiddenNicheArtistScale = 0;
 
-    const presets = [
-        {
-            name: "Deep Cuts",
-            description: "Obscure songs, balanced distance",
-            popularityScale: 0.9,
-            similarityScale: 0.5,
-            randomness: 0.35,
-        },
-        {
-            name: "Nearby Underground",
-            description: "Obscure songs close to seed",
-            popularityScale: 0.9,
-            similarityScale: 0.8,
-            randomness: 0.3,
-        },
-        {
-            name: "Popular Similar",
-            description: "Bigger songs close to seed",
-            popularityScale: 0.15,
-            similarityScale: 0.85,
-            randomness: 0.2,
-        },
-        {
-            name: "Far Discovery",
-            description: "Obscure songs farther away",
-            popularityScale: 0.8,
-            similarityScale: 0.15,
-            randomness: 0.45,
-        },
-        {
-            name: "Chaos Mode",
-            description: "Balanced streams, high randomness",
-            popularityScale: 0.5,
-            similarityScale: 0.5,
-            randomness: 1,
-        },
-    ];
+    // A preset shows as on while the sliders still match it, so moving a slider switches it off.
+    const activePreset = PRESETS.find((preset) =>
+        Number(popularity) === preset.popularity
+        && Number(similarityScale) === preset.similarityScale
+        && Number(randomness) === preset.randomness
+    );
 
     function splitInput(value) {
         return value
@@ -293,15 +304,15 @@ function App() {
         return number.toFixed(1);
     }
 
-    function formatPopularityScale(value) {
+    function formatPopularity(value) {
         const number = Number(value);
 
         if (number <= 0.2) {
-            return `${formatSliderValue(value)} — Much more popular`;
+            return `${formatSliderValue(value)} — Much more obscure`;
         }
 
         if (number < 0.5) {
-            return `${formatSliderValue(value)} — More popular`;
+            return `${formatSliderValue(value)} — More obscure`;
         }
 
         if (number === 0.5) {
@@ -309,10 +320,10 @@ function App() {
         }
 
         if (number < 0.8) {
-            return `${formatSliderValue(value)} — More obscure`;
+            return `${formatSliderValue(value)} — More popular`;
         }
 
-        return `${formatSliderValue(value)} — Much more obscure`;
+        return `${formatSliderValue(value)} — Much more popular`;
     }
 
     function formatSimilarityScale(value) {
@@ -376,15 +387,19 @@ function App() {
             generationSeed: createGenerationSeed(),
             avoidUsedTracks: spotifyConnected && avoidUsedTracks,
             nicheArtistScale: hiddenNicheArtistScale,
-            nicheSongScale: Number(popularityScale),
+            // The backend's scale runs the other way: 1 asks for the most obscure songs.
+            nicheSongScale: Number((1 - Number(popularity)).toFixed(2)),
             similarityScale: Number(similarityScale),
         };
     }
 
-    function applyPreset(preset) {
-        setPopularityScale(preset.popularityScale);
-        setSimilarityScale(preset.similarityScale);
-        setRandomness(preset.randomness);
+    // Clicking the preset that is already on switches it off and returns the sliders to their defaults.
+    function togglePreset(preset) {
+        const settings = activePreset === preset ? DEFAULT_SETTINGS : preset;
+
+        setPopularity(settings.popularity);
+        setSimilarityScale(settings.similarityScale);
+        setRandomness(settings.randomness);
         setCreatedPlaylist(null);
         setError("");
         setCreateError("");
@@ -1006,33 +1021,33 @@ function App() {
                                 />
 
                                 {selectedSeedArtist && (
-                                    <div className="selected-artist-summary">
+                                    <div className="seed-artist">
                                         {selectedSeedArtist.imageUrl ? (
                                             <img
+                                                className="seed-artist-image"
                                                 src={selectedSeedArtist.imageUrl}
                                                 alt=""
                                             />
                                         ) : (
-                                            <span className="summary-placeholder" aria-hidden="true">
+                                            <span className="seed-artist-image seed-artist-initial" aria-hidden="true">
                                                 {selectedSeedArtist.name?.charAt(0)?.toUpperCase() || "?"}
                                             </span>
                                         )}
 
-                                        <div>
-                                            <small>Seed artist</small>
-                                            <strong>{selectedSeedArtist.name}</strong>
-                                            {selectedSeedArtist.spotifyUrl && (
-                                                <a
-                                                    className="text-link"
-                                                    href={selectedSeedArtist.spotifyUrl}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    aria-label={`View on Spotify: ${selectedSeedArtist.name}`}
-                                                >
-                                                    View on Spotify ↗
-                                                </a>
-                                            )}
-                                        </div>
+                                        <p className="seed-artist-label">Seed artist</p>
+                                        <p className="seed-artist-name">{selectedSeedArtist.name}</p>
+
+                                        {selectedSeedArtist.spotifyUrl && (
+                                            <a
+                                                className="text-link seed-artist-link"
+                                                href={selectedSeedArtist.spotifyUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                aria-label={`View on Spotify: ${selectedSeedArtist.name}`}
+                                            >
+                                                View on Spotify ↗
+                                            </a>
+                                        )}
                                     </div>
                                 )}
 
@@ -1094,13 +1109,13 @@ function App() {
                                 />
 
                                 <div className="preset-grid">
-                                    {presets.map((preset) => (
+                                    {PRESETS.map((preset) => (
                                         <button
                                             key={preset.name}
                                             type="button"
-                                            className="preset-button"
-                                            onClick={() => applyPreset(preset)}
-                                            title={preset.description}
+                                            className={`preset-button ${activePreset === preset ? "selected" : ""}`}
+                                            aria-pressed={activePreset === preset}
+                                            onClick={() => togglePreset(preset)}
                                         >
                                             <strong>{preset.name}</strong>
                                             <span>{preset.description}</span>
@@ -1178,8 +1193,8 @@ function App() {
 
                                         <div className="field slider-field">
                                             <label htmlFor="popularity">
-                                                Popularity / Obscurity
-                                                <span>{formatPopularityScale(popularityScale)}</span>
+                                                Popularity
+                                                <span>{formatPopularity(popularity)}</span>
                                             </label>
                                             <input
                                                 id="popularity"
@@ -1187,8 +1202,8 @@ function App() {
                                                 min="0"
                                                 max="1"
                                                 step="0.1"
-                                                value={popularityScale}
-                                                onChange={(event) => setPopularityScale(event.target.value)}
+                                                value={popularity}
+                                                onChange={(event) => setPopularity(event.target.value)}
                                             />
                                         </div>
 

@@ -595,7 +595,7 @@ input[type="range"]:focus-visible {
 }
 
 .artist-placeholder,
-.summary-placeholder {
+.seed-artist-initial {
   display: grid;
   place-items: center;
   color: var(--green-bright);
@@ -638,47 +638,71 @@ input[type="range"]:focus-visible {
   display: none;
 }
 
-.selected-artist-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 5px;
-  padding: 7px 10px 7px 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--sunken);
-}
-
-.selected-artist-summary img,
-.summary-placeholder {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-}
-
-.selected-artist-summary img {
-  object-fit: cover;
-}
-
-.selected-artist-summary div {
+/* The chosen seed artist, shown large and centered at the top of step 3. */
+.seed-artist {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  align-items: center;
+  margin: 4px 0 6px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  text-align: center;
 }
 
-.selected-artist-summary small {
+.seed-artist-image {
+  width: 104px;
+  height: 104px;
+  margin-bottom: 12px;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 0 3px var(--green-ring), var(--shadow-soft);
+}
+
+.seed-artist-initial {
+  font-size: 2.4rem;
+}
+
+.seed-artist-label {
   color: var(--muted);
-  font-size: var(--text-xs);
-}
-
-.selected-artist-summary strong {
-  font-size: var(--text-md);
-}
-
-.selected-artist-summary .text-link {
-  display: block;
-  margin-top: 2px;
   font-size: var(--text-sm);
+}
+
+.seed-artist-name {
+  margin-top: 2px;
+  font-size: clamp(1.4rem, 3.5vw, 1.9rem);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.seed-artist-link {
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}
+
+.completed-step .seed-artist {
+  flex-direction: row;
+  justify-content: center;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.completed-step .seed-artist-image {
+  width: 40px;
+  height: 40px;
+  margin-bottom: 0;
+  font-size: 1rem;
+}
+
+.completed-step .seed-artist-label,
+.completed-step .seed-artist-link {
+  display: none;
+}
+
+.completed-step .seed-artist-name {
+  margin: 0;
+  font-size: 1rem;
 }
 
 .preset-grid {
@@ -713,6 +737,24 @@ input[type="range"]:focus-visible {
   border-color: var(--green);
   background: var(--green-faint);
   box-shadow: var(--shadow-hover);
+}
+
+.preset-button.selected,
+.preset-button.selected:hover {
+  border-color: var(--green-bright);
+  background: var(--green-soft);
+  box-shadow: inset 0 0 0 1px var(--green-bright), 0 0 22px var(--green-soft);
+}
+
+/* A check mark, so the selected preset doesn't rely on color alone. */
+.preset-button.selected strong::after {
+  content: " ✓";
+  content: " ✓" / "";
+  color: var(--green-bright);
+}
+
+.preset-button.selected span {
+  color: var(--muted-2);
 }
 
 .preset-button span {

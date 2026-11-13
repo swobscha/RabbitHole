@@ -1,5 +1,6 @@
 package rabbithole.controller;
 
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -12,6 +13,7 @@ import rabbithole.model.CreatedPlaylistResponse;
 import rabbithole.model.PlaylistCreateRequest;
 import rabbithole.model.PlaylistGenerationRequest;
 import rabbithole.model.PlaylistGenerationResult;
+import rabbithole.model.PrefetchRequest;
 import rabbithole.model.SpotifySession;
 import rabbithole.service.PlaylistGenerationService;
 import rabbithole.service.PlaylistHistoryService;
@@ -45,6 +47,13 @@ public class PlaylistController {
             @RequestBody PlaylistGenerationRequest request
     ) {
         return playlistGenerationService.generatePlaylist(session, request);
+    }
+
+    /** Starts loading data for the chosen seed artist while the visitor finishes the other steps. */
+    @PostMapping("/prefetch")
+    public ResponseEntity<Void> prefetch(@RequestBody PrefetchRequest request) {
+        playlistGenerationService.prefetch(request.seedArtist());
+        return ResponseEntity.accepted().build();
     }
 
     @PostMapping("/create")

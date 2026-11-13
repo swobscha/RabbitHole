@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -37,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
@@ -383,6 +385,54 @@ class ApiFlowIntegrationTest {
         long chosenArtists = tracks.stream().map(track -> track.track().artistName()).distinct().count();
         assertEquals(chosenArtists, FAKE.lastFmCallCount("artist.getinfo") - artistInfoBefore);
         assertTrue(tracks.stream().allMatch(track -> track.track().artistListeners() != null));
+    }
+
+    @Test
+    void prefetchLoadsTheSeedArtistSoGenerationNeedsNoNewLastFmCalls() {
+        String seed = "Prefetch " + uniqueCode();
+        String token = login(uniqueCode());
+        int similarBefore = FAKE.lastFmCallCount("artist.getsimilar");
+        int topTracksBefore = FAKE.lastFmCallCount("artist.gettoptracks");
+
+        // Works without logging in, answers at once, and loads in the background.
+        client().post().uri("/api/playlists/prefetch")
+                .bodyValue(Map.of("seedArtist", seed))
+                .exchange()
+                .expectStatus().isAccepted();
+
+        // The seed plus the three similar artists the fake returns.
+        waitUntil(() -> FAKE.lastFmCallCount("artist.gettoptracks") - topTracksBefore == 4);
+
+        // Generating at a less obscure setting reuses the prefetched, longer top-track lists.
+        assertEquals(3, generate(token, seed, 3).tracks().size());
+
+        assertEquals(1, FAKE.lastFmCallCount("artist.getsimilar") - similarBefore);
+        assertEquals(4, FAKE.lastFmCallCount("artist.gettoptracks") - topTracksBefore);
+    }
+
+    @Test
+    void prefetchRejectsAMissingSeedArtist() {
+        client().post().uri("/api/playlists/prefetch")
+                .bodyValue(Map.of("seedArtist", " "))
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    private static void waitUntil(BooleanSupplier condition) {
+        long deadline = System.currentTimeMillis() + 5_000;
+
+        while (!condition.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) {
+                fail("Timed out waiting for the background work to finish.");
+            }
+
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(error);
+            }
+        }
     }
 
     @Test

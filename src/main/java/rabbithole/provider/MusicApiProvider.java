@@ -16,4 +16,9 @@ public interface MusicApiProvider {
     default Mono<List<WeightedTrack>> addArtistDetails(List<WeightedTrack> tracks) {
         return Mono.just(tracks);
     }
+
+    /** Loads and caches what a generation for this request will need, ahead of time. */
+    default Mono<Void> prefetch(PlaylistGenerationRequest request) {
+        return Mono.empty();
+    }
 }

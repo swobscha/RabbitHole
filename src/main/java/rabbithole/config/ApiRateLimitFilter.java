@@ -110,6 +110,10 @@ public class ApiRateLimitFilter implements WebFilter {
             return new RouteLimit("generate-playlist", 5);
         }
 
+        if (method == HttpMethod.POST && path.equals("/api/playlists/prefetch")) {
+            return new RouteLimit("prefetch", 20);
+        }
+
         if (method == HttpMethod.POST && path.equals("/api/playlists/replace-track")) {
             return new RouteLimit("replace-track", 15);
         }

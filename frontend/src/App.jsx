@@ -132,6 +132,16 @@ const PRESETS = [
     },
 ];
 
+// Shown while a playlist generates, roughly following the server's steps. The timings are estimates:
+// the server doesn't report progress, and an artist loaded ahead of time skips the early steps.
+const GENERATION_STAGES = [
+    { after: 0, message: "Finding artists similar to your seed…" },
+    { after: 3, message: "Collecting their top songs…" },
+    { after: 6, message: "Ranking songs for your settings…" },
+    { after: 9, message: "Matching songs on Spotify…" },
+    { after: 18, message: "Still working. The first playlist for a new artist takes the longest." },
+];
+
 function StepHeading({ eyebrow, title, description, badge }) {
     return (
         <div className="step-heading">
@@ -185,8 +195,11 @@ function App() {
     const [lastGenerationRequest, setLastGenerationRequest] = useState(null);
 
     const [loading, setLoading] = useState(false);
+    const [generationStartedAt, setGenerationStartedAt] = useState(0);
+    const [clock, setClock] = useState(0);
     const [creating, setCreating] = useState(false);
     const [replacingTrackIndex, setReplacingTrackIndex] = useState(null);
+    const [previewTrackUri, setPreviewTrackUri] = useState(null);
 
     const [error, setError] = useState("");
     const [createError, setCreateError] = useState("");
@@ -348,19 +361,27 @@ function App() {
         return `${formatSliderValue(value)} — Much closer`;
     }
 
-    function spotifyTrackUrl(track) {
+    function spotifyTrackId(track) {
         if (!track?.spotifyUri) {
             return "";
         }
 
         const parts = track.spotifyUri.split(":");
-        const trackId = parts[parts.length - 1];
 
-        if (!trackId) {
-            return "";
-        }
+        return parts[parts.length - 1] || "";
+    }
 
-        return `https://open.spotify.com/track/${trackId}`;
+    function spotifyTrackUrl(track) {
+        const trackId = spotifyTrackId(track);
+
+        return trackId ? `https://open.spotify.com/track/${trackId}` : "";
+    }
+
+    // Spotify's embedded player: a short preview, or the full song for visitors logged into Spotify.
+    function spotifyEmbedUrl(track) {
+        const trackId = spotifyTrackId(track);
+
+        return trackId ? `https://open.spotify.com/embed/track/${trackId}?utm_source=generator&theme=0` : "";
     }
 
     // Last.fm's terms ask for its data to link back to the matching catalogue page.
@@ -376,7 +397,8 @@ function App() {
 
     function buildGenerationRequest() {
         return {
-            seedArtist,
+            // The artist picked in step 2, not the search text, which can name a different artist.
+            seedArtist: selectedSeedArtist?.name || seedArtist,
             seedSpotifyArtistId: selectedSeedArtist?.id || "",
             playlistName,
             playlistSize: Number(playlistSize),
@@ -574,6 +596,20 @@ function App() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Ticks twice a second while generating, to move the progress message along.
+    useEffect(() => {
+        if (!loading) {
+            return undefined;
+        }
+
+        const timer = setInterval(() => setClock(Date.now()), 500);
+
+        return () => clearInterval(timer);
+    }, [loading]);
+
+    const generationSeconds = Math.max(0, (clock - generationStartedAt) / 1000);
+    const generationMessage = GENERATION_STAGES.findLast((stage) => generationSeconds >= stage.after).message;
+
     async function generatePlaylist(event) {
         event.preventDefault();
 
@@ -583,6 +619,7 @@ function App() {
         }
 
         setLoading(true);
+        setGenerationStartedAt(Date.now());
         setError("");
         setCreateError("");
         setReplaceError("");
@@ -590,6 +627,7 @@ function App() {
         resetCopy();
         setPlaylist(null);
         setCreatedPlaylist(null);
+        setPreviewTrackUri(null);
 
         const requestBody = buildGenerationRequest();
 
@@ -810,7 +848,22 @@ function App() {
         setUiStage((current) => Math.max(2, current - 1));
     }
 
+    // Starts loading the artist's data on the server while the visitor finishes the other steps,
+    // so generating is quicker. Nothing waits for it, and a failure only means no head start.
+    function prefetchSeedArtist(name) {
+        if (!name) {
+            return;
+        }
+
+        fetch(apiUrl("/api/playlists/prefetch"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ seedArtist: name }),
+        }).catch(() => {});
+    }
+
     function selectSeedArtist(artist) {
+        prefetchSeedArtist(artist.name);
         setSelectedSeedArtist(artist);
         setArtistSearchError("");
         setCreatedPlaylist(null);
@@ -1236,6 +1289,15 @@ function App() {
                                     </button>
                                 </div>
 
+                                {loading && (
+                                    <div className="generation-progress">
+                                        <div className="progress-track" aria-hidden="true">
+                                            <span />
+                                        </div>
+                                        <p>{generationMessage}</p>
+                                    </div>
+                                )}
+
                                 {error && <p className="error" role="alert">{error}</p>}
                             </section>
                         )}
@@ -1317,6 +1379,8 @@ function App() {
                     <ol className="track-list">
                         {playlist.tracks.map((item, index) => {
                             const spotifyUrl = spotifyTrackUrl(item.track);
+                            const embedUrl = spotifyEmbedUrl(item.track);
+                            const previewOpen = Boolean(embedUrl) && previewTrackUri === item.track.spotifyUri;
 
                             return (
                                 <li
@@ -1345,6 +1409,16 @@ function App() {
                                                 <span key={genre}>{genre}</span>
                                             ))}
                                         </div>
+                                    )}
+
+                                    {previewOpen && (
+                                        <iframe
+                                            className="track-preview"
+                                            src={embedUrl}
+                                            title={`Spotify player: ${item.track.name} by ${item.track.artistName}`}
+                                            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                                            loading="lazy"
+                                        />
                                     )}
 
                                     <details>
@@ -1389,6 +1463,22 @@ function App() {
                                             >
                                                 Last.fm ↗
                                             </a>
+                                        )}
+
+                                        {embedUrl && (
+                                            <button
+                                                type="button"
+                                                className="button button-secondary button-small"
+                                                aria-expanded={previewOpen}
+                                                aria-label={`${previewOpen ? "Hide preview" : "Preview"}: ${item.track.name}`}
+                                                onClick={() => setPreviewTrackUri(previewOpen ? null : item.track.spotifyUri)}
+                                            >
+                                                {previewOpen ? "Hide preview" : (
+                                                    <>
+                                                        <span aria-hidden="true">▶ </span>Preview
+                                                    </>
+                                                )}
+                                            </button>
                                         )}
 
                                         <button
@@ -1495,6 +1585,10 @@ function App() {
                     <a href="/privacy.html">Privacy policy</a>
                     {" · "}
                     RabbitHole is not affiliated with or endorsed by Spotify or Last.fm.
+                </p>
+                <p>
+                    Built by{" "}
+                    <a href="https://samwobschall.dev" target="_blank" rel="noopener">samwobschall.dev</a>
                 </p>
             </footer>
 

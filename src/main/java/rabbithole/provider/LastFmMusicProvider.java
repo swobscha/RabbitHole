@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
@@ -69,7 +70,9 @@ public class LastFmMusicProvider implements MusicApiProvider {
 
     private final Cache<String, List<ArtistSeed>> similarArtistCache = newCache(200);
     private final Cache<String, ArtistSeed> artistInfoCache = newCache(10_000);
-    private final Cache<String, List<TopTrack>> topTracksCache = newCache(2_000);
+    // Keyed by artist only: a list fetched with a higher limit also answers any smaller limit.
+    private final Cache<String, CachedTopTracks> topTracksCache = newCache(2_000);
+    private final Map<String, PendingTopTracks> pendingTopTracks = new ConcurrentHashMap<>();
     private final Cache<String, TrackInfo> trackInfoCache = newCache(5_000);
     private final Cache<String, Set<String>> artistTagsCache = newCache(5_000);
 
@@ -128,6 +131,20 @@ public class LastFmMusicProvider implements MusicApiProvider {
                 .flatMap(artistSeed -> findTopTracksForArtist(artistSeed, request), LASTFM_CONCURRENCY)
                 .distinct(track -> (track.artistName() + "|" + track.name()).toLowerCase(Locale.ROOT))
                 .switchIfEmpty(Flux.defer(this::errorIfLastFmWasUnavailable));
+    }
+
+    /**
+     * Runs the same lookups as a generation for this request and keeps only the cached results.
+     * Failures are ignored: the real generation will report them if they still happen.
+     */
+    @Override
+    public Mono<Void> prefetch(PlaylistGenerationRequest request) {
+        return findCandidateTracks(request)
+                .then()
+                .onErrorResume(error -> {
+                    log.debug("Prefetch for {} stopped early: {}", request.seedArtist(), error.getMessage());
+                    return Mono.empty();
+                });
     }
 
     /** Only look up listener counts before ranking when the ranking actually uses them. */
@@ -514,29 +531,41 @@ public class LastFmMusicProvider implements MusicApiProvider {
 
     /** One request covers every wanted page, and each track already includes its listener counts. */
     private Flux<TopTrack> fetchTopTracks(ArtistSeed artistSeed, int limit) {
-        String cacheKey = cleanKey(artistSeed.name()) + "|limit:" + limit;
+        String cacheKey = cleanKey(artistSeed.name());
 
-        List<TopTrack> cached = topTracksCache.getIfPresent(cacheKey);
+        CachedTopTracks cached = topTracksCache.getIfPresent(cacheKey);
 
-        if (cached != null) {
-            return Flux.fromIterable(cached);
+        if (cached != null && cached.limit() >= limit) {
+            return Flux.fromIterable(cached.tracks()).filter(track -> track.globalRank() <= limit);
         }
 
         if (isRateLimited()) {
             return Flux.empty();
         }
 
-        return callLastFm("artist.gettoptracks", Map.of("artist", artistSeed.name(), "limit", String.valueOf(limit)))
-                .flatMapMany(json -> {
+        // A prefetch may already be loading this artist, so share its request instead of sending another.
+        PendingTopTracks pending = pendingTopTracks.compute(cacheKey, (key, existing) ->
+                existing != null && existing.limit() >= limit
+                        ? existing
+                        : new PendingTopTracks(limit, requestTopTracks(key, artistSeed.name(), limit))
+        );
+
+        return pending.tracks()
+                .flatMapMany(tracks -> Flux.fromIterable(tracks).filter(track -> track.globalRank() <= limit));
+    }
+
+    private Mono<List<TopTrack>> requestTopTracks(String cacheKey, String artistName, int limit) {
+        return callLastFm("artist.gettoptracks", Map.of("artist", artistName, "limit", String.valueOf(limit)))
+                .map(json -> {
                     if (hasLastFmError(json)) {
                         handleLastFmError(json);
-                        return Flux.empty();
+                        return List.<TopTrack>of();
                     }
 
                     JsonNode tracksNode = json.path("toptracks").path("track");
 
                     if (!tracksNode.isArray()) {
-                        return Flux.empty();
+                        return List.<TopTrack>of();
                     }
 
                     List<TopTrack> tracks = new ArrayList<>();
@@ -546,21 +575,30 @@ public class LastFmMusicProvider implements MusicApiProvider {
 
                         tracks.add(new TopTrack(
                                 trackNode.path("name").asText(""),
-                                trackNode.path("artist").path("name").asText(artistSeed.name()),
+                                trackNode.path("artist").path("name").asText(artistName),
                                 parseLong(trackNode.path("listeners").asText("")),
                                 parseLong(trackNode.path("playcount").asText("")),
                                 i + 1
                         ));
                     }
 
-                    topTracksCache.put(cacheKey, tracks);
+                    // Keep whichever list covers more ranks if two requests for this artist overlap.
+                    topTracksCache.asMap().merge(
+                            cacheKey,
+                            new CachedTopTracks(limit, List.copyOf(tracks)),
+                            (current, fresh) -> current.limit() >= fresh.limit() ? current : fresh
+                    );
 
-                    return Flux.fromIterable(tracks);
+                    return tracks;
                 })
                 .onErrorResume(error -> {
                     handleRequestError(error);
-                    return Flux.empty();
-                });
+                    return Mono.just(List.of());
+                })
+                .doFinally(signal -> pendingTopTracks.computeIfPresent(cacheKey, (key, pending) ->
+                        pending.limit() <= limit ? null : pending
+                ))
+                .cache();
     }
 
     private Mono<TrackCandidate> buildTrackCandidate(
@@ -884,5 +922,13 @@ public class LastFmMusicProvider implements MusicApiProvider {
             Long playcount,
             int globalRank
     ) {
+    }
+
+    /** An artist's top tracks, fetched up to {@code limit} ranks. */
+    private record CachedTopTracks(int limit, List<TopTrack> tracks) {
+    }
+
+    /** A top-tracks request still in flight, shared by anyone who needs no more than {@code limit} ranks. */
+    private record PendingTopTracks(int limit, Mono<List<TopTrack>> tracks) {
     }
 }

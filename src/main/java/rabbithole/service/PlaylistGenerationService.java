@@ -1,5 +1,7 @@
 package rabbithole.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -15,12 +17,14 @@ import rabbithole.model.TrackCandidate;
 import rabbithole.model.WeightedTrack;
 import rabbithole.provider.MusicApiProvider;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -45,6 +49,15 @@ public class PlaylistGenerationService {
     private static final int MAX_FILTER_ITEMS = 25;
     private static final int MAX_FILTER_ITEM_LENGTH = 100;
     private static final int MAX_GENERATION_SEED_LENGTH = 120;
+
+    private static final int PREFETCH_PLAYLIST_SIZE = 20;
+    private static final double PREFETCH_SONG_SCALE = 1.0;
+
+    // Visitors often go back and pick the same artist again, so skip repeats for a while.
+    private final Cache<String, Boolean> recentPrefetches = Caffeine.newBuilder()
+            .maximumSize(1_000)
+            .expireAfterWrite(Duration.ofMinutes(10))
+            .build();
 
     private final List<MusicApiProvider> providers;
     private final TrackScoringService trackScoringService;
@@ -116,6 +129,53 @@ public class PlaylistGenerationService {
                                             )
                                     );
                                 })
+                );
+    }
+
+    /**
+     * Starts loading a seed artist's data in the background, so the generation that usually follows a
+     * few steps later finds it cached. It mirrors a first round at the most obscure popularity setting,
+     * which fetches the most top tracks per artist; every other setting reuses part of that list.
+     */
+    public void prefetch(String seedArtist) {
+        if (seedArtist == null || seedArtist.isBlank() || seedArtist.length() > MAX_ARTIST_NAME_LENGTH) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Seed artist is required and must be " + MAX_ARTIST_NAME_LENGTH + " characters or fewer."
+            );
+        }
+
+        String artist = seedArtist.trim();
+
+        if (recentPrefetches.asMap().putIfAbsent(artist.toLowerCase(Locale.ROOT), Boolean.TRUE) != null) {
+            return;
+        }
+
+        PlaylistGenerationRequest request = new PlaylistGenerationRequest(
+                artist,
+                null,
+                "Prefetch",
+                PREFETCH_PLAYLIST_SIZE,
+                List.of(),
+                List.of(),
+                List.of(),
+                0.5,
+                "prefetch",
+                false,
+                0.0,
+                PREFETCH_SONG_SCALE,
+                0.5,
+                DISCOVERY_BATCH_SIZE
+        );
+
+        log.info("Prefetch started | seedArtist={}", artist);
+
+        Flux.fromIterable(providers)
+                .flatMap(provider -> provider.prefetch(request))
+                .subscribe(
+                        ignored -> {
+                        },
+                        error -> log.debug("Prefetch for {} failed: {}", artist, error.getMessage())
                 );
     }
 

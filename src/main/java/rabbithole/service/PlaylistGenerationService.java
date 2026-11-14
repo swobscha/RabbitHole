@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 @Service
@@ -55,12 +56,17 @@ public class PlaylistGenerationService {
 
     private static final int PREFETCH_PLAYLIST_SIZE = 20;
     private static final double PREFETCH_SONG_SCALE = 1.0;
+    // Prefetches are only a head start, so extra ones are skipped rather than queued.
+    // This keeps them from using up Last.fm's allowance while real playlists wait.
+    private static final int MAX_RUNNING_PREFETCHES = 2;
 
     // Visitors often go back and pick the same artist again, so skip repeats for a while.
     private final Cache<String, Boolean> recentPrefetches = Caffeine.newBuilder()
             .maximumSize(1_000)
             .expireAfterWrite(Duration.ofMinutes(10))
             .build();
+
+    private final AtomicInteger runningPrefetches = new AtomicInteger();
 
     private final List<MusicApiProvider> providers;
     private final TrackScoringService trackScoringService;
@@ -150,7 +156,14 @@ public class PlaylistGenerationService {
 
         String artist = seedArtist.trim();
 
+        if (runningPrefetches.incrementAndGet() > MAX_RUNNING_PREFETCHES) {
+            runningPrefetches.decrementAndGet();
+            log.debug("Prefetch skipped, {} already running | seedArtist={}", MAX_RUNNING_PREFETCHES, artist);
+            return;
+        }
+
         if (recentPrefetches.asMap().putIfAbsent(artist.toLowerCase(Locale.ROOT), Boolean.TRUE) != null) {
+            runningPrefetches.decrementAndGet();
             return;
         }
 
@@ -175,6 +188,7 @@ public class PlaylistGenerationService {
 
         Flux.fromIterable(providers)
                 .flatMap(provider -> provider.prefetch(request))
+                .doFinally(ignored -> runningPrefetches.decrementAndGet())
                 .subscribe(
                         ignored -> {
                         },
@@ -314,7 +328,7 @@ public class PlaylistGenerationService {
                                 stopReason
                         );
 
-                        return withArtistDetails(result);
+                        return Mono.just(result);
                     }
 
                     return generateWithExpansion(
@@ -507,22 +521,6 @@ public class PlaylistGenerationService {
             state.artistCounts.merge(lookup.artistKey(), 1, Integer::sum);
             state.spotifyResolved++;
         }
-    }
-
-    /** Artist listener counts are fetched only for the artists that made the playlist. */
-    private Mono<PlaylistGenerationResult> withArtistDetails(PlaylistGenerationResult result) {
-        Mono<List<WeightedTrack>> tracks = Mono.just(result.tracks());
-
-        for (MusicApiProvider provider : providers) {
-            tracks = tracks.flatMap(provider::addArtistDetails);
-        }
-
-        return tracks
-                .map(detailed -> new PlaylistGenerationResult(result.playlistName(), result.seedArtist(), detailed))
-                .onErrorResume(error -> {
-                    log.warn("Could not add artist details to the playlist: {}", error.getMessage());
-                    return Mono.just(result);
-                });
     }
 
     private void validateGenerationRequest(PlaylistGenerationRequest request) {

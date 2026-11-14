@@ -101,15 +101,12 @@ public class GlobalApiExceptionHandler {
     ) {
         HttpStatus status = HttpStatus.BAD_REQUEST;
 
-        String message = error.getMessage();
-
-        if (message == null || message.isBlank()) {
-            message = "The request was invalid.";
-        }
+        // The exception text can come from a library and describe internals, so it stays in the log.
+        log.debug("Invalid request on {}: {}", exchange.getRequest().getPath().value(), error.getMessage());
 
         return Mono.just(ResponseEntity
                 .status(status)
-                .body(buildError(status, message, exchange)));
+                .body(buildError(status, "The request was invalid.", exchange)));
     }
 
     @ExceptionHandler(Exception.class)

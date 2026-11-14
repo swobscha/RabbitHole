@@ -33,9 +33,29 @@ class ApiRateLimitFilterTest {
         assertTrue(third.getResponse().getBodyAsString().block().contains("hourly limit"));
     }
 
+    @Test
+    void eachVisitorGetsOnlySixPrefetchesAMinute() {
+        SpotifyAuthService auth = Mockito.mock(SpotifyAuthService.class);
+        Mockito.when(auth.findSession(Mockito.any())).thenReturn(Mono.empty());
+
+        ApiRateLimitFilter filter = new ApiRateLimitFilter(auth, 0, 1000, 1000);
+
+        for (int i = 0; i < 6; i++) {
+            assertNull(postFrom(filter, "/api/playlists/prefetch", "10.0.0.9").getResponse().getStatusCode());
+        }
+
+        MockServerWebExchange seventh = postFrom(filter, "/api/playlists/prefetch", "10.0.0.9");
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, seventh.getResponse().getStatusCode());
+    }
+
     private MockServerWebExchange generateFrom(ApiRateLimitFilter filter, String ip) {
+        return postFrom(filter, "/api/playlists/generate", ip);
+    }
+
+    private MockServerWebExchange postFrom(ApiRateLimitFilter filter, String path, String ip) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
-                MockServerHttpRequest.post("/api/playlists/generate")
+                MockServerHttpRequest.post(path)
                         .remoteAddress(new InetSocketAddress(ip, 5000))
                         .build()
         );

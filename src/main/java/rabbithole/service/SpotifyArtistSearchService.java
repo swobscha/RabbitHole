@@ -1,8 +1,10 @@
 package rabbithole.service;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import rabbithole.model.SpotifyArtistSearchResult;
 import rabbithole.model.SpotifySession;
@@ -17,6 +19,8 @@ import java.util.Optional;
 public class SpotifyArtistSearchService {
 
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+    // Matches the seed artist limit on generate and prefetch.
+    private static final int MAX_QUERY_LENGTH = 100;
 
     private final SpotifyAuthService spotifyAuthService;
     private final WebClient webClient;
@@ -36,6 +40,13 @@ public class SpotifyArtistSearchService {
     public Mono<List<SpotifyArtistSearchResult>> searchArtists(Optional<SpotifySession> session, String query) {
         if (query == null || query.isBlank()) {
             return Mono.just(List.of());
+        }
+
+        if (query.trim().length() > MAX_QUERY_LENGTH) {
+            return Mono.error(new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Artist names must be " + MAX_QUERY_LENGTH + " characters or fewer."
+            ));
         }
 
         return spotifyAuthService.getAccessToken(session)

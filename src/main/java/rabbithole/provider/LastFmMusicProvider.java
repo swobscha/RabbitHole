@@ -15,7 +15,6 @@ import reactor.core.publisher.Mono;
 import rabbithole.config.LastFmProperties;
 import rabbithole.model.PlaylistGenerationRequest;
 import rabbithole.model.TrackCandidate;
-import rabbithole.model.WeightedTrack;
 import rabbithole.service.TrackText;
 import tools.jackson.databind.JsonNode;
 
@@ -32,7 +31,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 
 @Service
 public class LastFmMusicProvider implements MusicApiProvider {
@@ -162,59 +160,9 @@ public class LastFmMusicProvider implements MusicApiProvider {
                     .take(artistsToExplore);
         }
 
-        // Listener counts don't affect this ranking, so they're fetched later, only for the chosen tracks.
+        // Listener counts don't affect this ranking and the page doesn't show them, so they're skipped.
         return Flux.fromIterable(rankArtists(artistSeeds, request))
                 .take(artistsToExplore);
-    }
-
-    @Override
-    public Mono<List<WeightedTrack>> addArtistDetails(List<WeightedTrack> tracks) {
-        Set<String> artistsWithoutDetails = tracks.stream()
-                .map(WeightedTrack::track)
-                .filter(track -> "lastfm".equals(track.sourceApi()))
-                .filter(track -> track.artistListeners() == null && track.artistPlaycount() == null)
-                .map(TrackCandidate::artistName)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-
-        if (artistsWithoutDetails.isEmpty()) {
-            return Mono.just(tracks);
-        }
-
-        return Flux.fromIterable(artistsWithoutDetails)
-                .flatMap(name -> enrichArtistSeed(new ArtistSeed(name, 0, null, null, false, 0)), LASTFM_CONCURRENCY)
-                .collectMap(ArtistSeed::name, seed -> seed)
-                .map(details -> tracks.stream()
-                        .map(weightedTrack -> withArtistDetails(weightedTrack, details.get(weightedTrack.track().artistName())))
-                        .toList());
-    }
-
-    private WeightedTrack withArtistDetails(WeightedTrack weightedTrack, ArtistSeed details) {
-        TrackCandidate track = weightedTrack.track();
-
-        if (details == null || (details.listeners() == null && details.playcount() == null)) {
-            return weightedTrack;
-        }
-
-        return new WeightedTrack(
-                new TrackCandidate(
-                        track.id(),
-                        track.name(),
-                        track.artistName(),
-                        track.artistId(),
-                        track.albumName(),
-                        track.popularity(),
-                        track.genres(),
-                        track.sourceApi(),
-                        track.spotifyUri(),
-                        details.listeners(),
-                        details.playcount(),
-                        track.trackListeners(),
-                        track.trackPlaycount(),
-                        track.artistSimilarity()
-                ),
-                weightedTrack.score(),
-                weightedTrack.reasons()
-        );
     }
 
     private Flux<TrackCandidate> errorIfLastFmWasUnavailable() {

@@ -58,6 +58,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 class ApiFlowIntegrationTest {
 
     private static final String STATE_COOKIE = "spotify_oauth_state";
+    private static final String NONCE_COOKIE = "spotify_login_nonce";
     private static final String ALLOWED_ORIGIN = "http://frontend.test";
 
     private static final FakeMusicApis FAKE = startFake();
@@ -287,8 +288,71 @@ class ApiFlowIntegrationTest {
                 finishLogin(uniqueCode(), state, "some-other-state")
         )) {
             assertNull(redirect.getFragment());
-            assertTrue(redirect.getQuery().contains("spotify=error"), redirect.toString());
+            // A fixed code only, never message text, so a link can't make the page show arbitrary words.
+            assertEquals("spotify=error&reason=unverified", redirect.getQuery(), redirect.toString());
         }
+    }
+
+    @Test
+    void loginHandsBackTheCodeThisBrowserStartedWithSoCraftedLinksCanBeRejected() {
+        String nonce = uniqueCode();
+
+        EntityExchangeResult<byte[]> login = client().get()
+                .uri(builder -> builder.path("/api/spotify/login").queryParam("nonce", nonce).build())
+                .exchange()
+                .expectStatus().isFound()
+                .expectBody()
+                .returnResult();
+
+        ResponseCookie stateCookie = login.getResponseCookies().getFirst(STATE_COOKIE);
+        ResponseCookie nonceCookie = login.getResponseCookies().getFirst(NONCE_COOKIE);
+
+        assertNotNull(stateCookie);
+        assertNotNull(nonceCookie);
+        assertTrue(nonceCookie.isHttpOnly());
+
+        URI redirect = client().get()
+                .uri(builder -> builder.path("/api/spotify/callback")
+                        .queryParam("code", uniqueCode())
+                        .queryParam("state", stateOf(login))
+                        .build())
+                .cookie(STATE_COOKIE, stateCookie.getValue())
+                .cookie(NONCE_COOKIE, nonceCookie.getValue())
+                .exchange()
+                .expectStatus().isFound()
+                .expectBody()
+                .returnResult()
+                .getResponseHeaders()
+                .getLocation();
+
+        assertTrue(redirect.getFragment().matches("session=[^&]+&login=" + nonce), redirect.toString());
+
+        // Anything that isn't a plain random code is dropped rather than echoed into the address bar.
+        ResponseCookie rejected = client().get()
+                .uri(builder -> builder.path("/api/spotify/login").queryParam("nonce", "<script>alert(1)</script>").build())
+                .exchange()
+                .expectStatus().isFound()
+                .expectBody()
+                .returnResult()
+                .getResponseCookies()
+                .getFirst(NONCE_COOKIE);
+
+        assertNotNull(rejected);
+        assertEquals("", rejected.getValue());
+    }
+
+    @Test
+    void artistSearchRejectsOverlongNamesWithoutAskingSpotify() {
+        int searchesBefore = FAKE.artistSearchRequests.get();
+
+        client().get()
+                .uri(builder -> builder.path("/api/spotify/artists/search").queryParam("query", "a".repeat(101)).build())
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.message").isEqualTo("Artist names must be 100 characters or fewer.");
+
+        assertEquals(searchesBefore, FAKE.artistSearchRequests.get());
     }
 
     @Test
@@ -387,10 +451,8 @@ class ApiFlowIntegrationTest {
         assertEquals(4, FAKE.lastFmCallCount("artist.gettoptracks") - topTracksBefore);
         assertEquals(trackInfoBefore, FAKE.lastFmCallCount("track.getinfo"));
 
-        // Listener counts are looked up only for the artists that made the playlist, and still shown.
-        long chosenArtists = tracks.stream().map(track -> track.track().artistName()).distinct().count();
-        assertEquals(chosenArtists, FAKE.lastFmCallCount("artist.getinfo") - artistInfoBefore);
-        assertTrue(tracks.stream().allMatch(track -> track.track().artistListeners() != null));
+        // Artist listener counts aren't shown or used by this ranking, so they aren't looked up.
+        assertEquals(artistInfoBefore, FAKE.lastFmCallCount("artist.getinfo"));
     }
 
     @Test
@@ -444,16 +506,13 @@ class ApiFlowIntegrationTest {
         }
 
         // The page can show when the pause ends, and it's saved so a restart remembers it.
-        Map<?, ?> status = client().get().uri("/api/spotify/status")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody(Map.class)
-                .returnResult()
-                .getResponseBody();
-        long pausedUntil = ((Number) status.get("spotifyPausedUntil")).longValue();
+        long pausedUntil = spotifyPausedUntil();
 
         assertTrue(pausedUntil > System.currentTimeMillis());
-        waitUntil(() -> Long.valueOf(pausedUntil).equals(savedSpotifyPause()));
+        waitUntil(() -> {
+            Long saved = savedSpotifyPause();
+            return saved != null && saved >= pausedUntil;
+        });
 
         // Nothing reaches Spotify during the pause, not even an artist search.
         int artistSearchesBefore = FAKE.artistSearchRequests.get();
@@ -464,8 +523,9 @@ class ApiFlowIntegrationTest {
 
         assertEquals(artistSearchesBefore, FAKE.artistSearchRequests.get());
 
-        // Once the pause is over, requests go through again.
-        waitUntil(() -> System.currentTimeMillis() > pausedUntil);
+        // Once the pause is over, requests go through again. Searches that were already under way when
+        // Spotify said to wait can push the end back a few milliseconds, so wait for the server to say so.
+        waitUntil(() -> spotifyPausedUntil() == 0);
 
         client().get().uri("/api/spotify/artists/search?query=Pause")
                 .exchange()
@@ -493,6 +553,17 @@ class ApiFlowIntegrationTest {
 
         assertEquals(3, generate(token, seed, 3).tracks().size());
         assertEquals(searchesAfterRestart, FAKE.trackSearchRequests.get());
+    }
+
+    private long spotifyPausedUntil() {
+        Map<?, ?> status = client().get().uri("/api/spotify/status")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(Map.class)
+                .returnResult()
+                .getResponseBody();
+
+        return ((Number) status.get("spotifyPausedUntil")).longValue();
     }
 
     private Long savedSpotifyPause() {

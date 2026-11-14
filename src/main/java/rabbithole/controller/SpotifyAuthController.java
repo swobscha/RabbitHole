@@ -22,11 +22,11 @@ import rabbithole.service.SpotifyAuthService;
 import rabbithole.service.SpotifyRateLimitGuard;
 
 import java.net.URI;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/api/spotify")
@@ -35,7 +35,12 @@ public class SpotifyAuthController {
     private static final Logger log = LoggerFactory.getLogger(SpotifyAuthController.class);
 
     private static final String LOGIN_STATE_COOKIE = "spotify_oauth_state";
+    private static final String LOGIN_NONCE_COOKIE = "spotify_login_nonce";
     private static final Duration LOGIN_STATE_LIFETIME = Duration.ofMinutes(10);
+
+    // The page makes a random code when it starts a login and only accepts a session that returns it.
+    // That stops a crafted link from signing a visitor into someone else's account.
+    private static final Pattern LOGIN_NONCE = Pattern.compile("[A-Za-z0-9_-]{16,64}");
 
     private final SpotifyAuthService spotifyAuthService;
     private final SpotifyRateLimitGuard spotifyRateLimitGuard;
@@ -49,7 +54,10 @@ public class SpotifyAuthController {
     }
 
     @GetMapping("/login")
-    public Mono<ResponseEntity<Void>> login(ServerHttpRequest request) {
+    public Mono<ResponseEntity<Void>> login(
+            ServerHttpRequest request,
+            @RequestParam(required = false) String nonce
+    ) {
         URI loopbackLogin = loopbackLoginRedirect(request);
 
         if (loopbackLogin != null) {
@@ -62,7 +70,12 @@ public class SpotifyAuthController {
         return Mono.just(ResponseEntity
                 .status(HttpStatus.FOUND)
                 .location(URI.create(authorizationUrl))
-                .header(HttpHeaders.SET_COOKIE, loginStateCookie(state, LOGIN_STATE_LIFETIME).toString())
+                .header(HttpHeaders.SET_COOKIE, loginCookie(LOGIN_STATE_COOKIE, state, LOGIN_STATE_LIFETIME).toString())
+                .header(HttpHeaders.SET_COOKIE, loginCookie(
+                        LOGIN_NONCE_COOKIE,
+                        validNonce(nonce) ? nonce : "",
+                        validNonce(nonce) ? LOGIN_STATE_LIFETIME : Duration.ZERO
+                ).toString())
                 .build());
     }
 
@@ -71,28 +84,31 @@ public class SpotifyAuthController {
             @RequestParam(required = false) String code,
             @RequestParam(required = false) String error,
             @RequestParam(required = false) String state,
-            @CookieValue(name = LOGIN_STATE_COOKIE, required = false) String expectedState
+            @CookieValue(name = LOGIN_STATE_COOKIE, required = false) String expectedState,
+            @CookieValue(name = LOGIN_NONCE_COOKIE, required = false) String nonce
     ) {
         if (!statesMatch(state, expectedState)) {
             log.warn("Rejected a Spotify callback whose state did not match this browser's login.");
 
-            return Mono.just(errorRedirect("Your Spotify login could not be verified. Please connect again."));
+            return Mono.just(errorRedirect(LoginError.UNVERIFIED));
         }
 
         if (error != null && !error.isBlank()) {
-            return Mono.just(errorRedirect("Spotify authorization was cancelled or failed."));
+            return Mono.just(errorRedirect(LoginError.CANCELLED));
         }
 
         if (code == null || code.isBlank()) {
-            return Mono.just(errorRedirect("Spotify did not return an authorization code."));
+            return Mono.just(errorRedirect(LoginError.NO_CODE));
         }
 
+        String returnedNonce = validNonce(nonce) ? "&login=" + nonce : "";
+
         return spotifyAuthService.completeLogin(code)
-                .map(sessionToken -> redirectToFrontend("#session=" + sessionToken))
+                .map(sessionToken -> redirectToFrontend("#session=" + sessionToken + returnedNonce))
                 .onErrorResume(failure -> {
                     log.error("Spotify login failed.", failure);
 
-                    return Mono.just(errorRedirect(loginFailureMessage(failure)));
+                    return Mono.just(errorRedirect(loginFailure(failure)));
                 });
     }
 
@@ -138,8 +154,8 @@ public class SpotifyAuthController {
         return null;
     }
 
-    private ResponseCookie loginStateCookie(String value, Duration maxAge) {
-        return ResponseCookie.from(LOGIN_STATE_COOKIE, value)
+    private ResponseCookie loginCookie(String name, String value, Duration maxAge) {
+        return ResponseCookie.from(name, value)
                 .httpOnly(true)
                 .secure(spotifyAuthService.configuredRedirectUri().startsWith("https://"))
                 .sameSite("Lax")
@@ -159,16 +175,45 @@ public class SpotifyAuthController {
         );
     }
 
-    private String loginFailureMessage(Throwable failure) {
-        if (failure instanceof ResponseStatusException statusException && statusException.getReason() != null) {
-            return statusException.getReason();
-        }
-
-        return "Spotify connection failed. Please try again.";
+    private boolean validNonce(String nonce) {
+        return nonce != null && LOGIN_NONCE.matcher(nonce).matches();
     }
 
-    private ResponseEntity<Void> errorRedirect(String message) {
-        return redirectToFrontend("?spotify=error&message=" + encode(message));
+    private LoginError loginFailure(Throwable failure) {
+        if (failure instanceof ResponseStatusException statusException) {
+            if (statusException.getStatusCode().value() == 403) {
+                return LoginError.NOT_ALLOWED;
+            }
+
+            if (statusException.getStatusCode().value() == 429) {
+                return LoginError.PAUSED;
+            }
+        }
+
+        return LoginError.FAILED;
+    }
+
+    /**
+     * Only a short code goes in the address bar, and the page turns it into a fixed message. If the
+     * page showed text from the link instead, anyone could make the real site display any message.
+     */
+    private ResponseEntity<Void> errorRedirect(LoginError error) {
+        return redirectToFrontend("?spotify=error&reason=" + error.code);
+    }
+
+    private enum LoginError {
+        UNVERIFIED("unverified"),
+        CANCELLED("cancelled"),
+        NO_CODE("no-code"),
+        NOT_ALLOWED("not-allowed"),
+        PAUSED("paused"),
+        FAILED("failed");
+
+        private final String code;
+
+        LoginError(String code) {
+            this.code = code;
+        }
     }
 
     private ResponseEntity<Void> redirectToFrontend(String suffix) {
@@ -179,11 +224,8 @@ public class SpotifyAuthController {
         return ResponseEntity
                 .status(HttpStatus.FOUND)
                 .location(URI.create(cleanFrontendUrl + suffix))
-                .header(HttpHeaders.SET_COOKIE, loginStateCookie("", Duration.ZERO).toString())
+                .header(HttpHeaders.SET_COOKIE, loginCookie(LOGIN_STATE_COOKIE, "", Duration.ZERO).toString())
+                .header(HttpHeaders.SET_COOKIE, loginCookie(LOGIN_NONCE_COOKIE, "", Duration.ZERO).toString())
                 .build();
-    }
-
-    private String encode(String value) {
-        return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
     }
 }

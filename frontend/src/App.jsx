@@ -60,6 +60,57 @@ function writeSessionToken(token) {
     }
 }
 
+// A random code saved when this browser starts a Spotify login. The backend hands it back with the
+// session, and a session without it is ignored, so a crafted link can't sign someone into another account.
+const LOGIN_NONCE_STORAGE_KEY = "rabbitholeLoginNonce";
+// Matches how long the backend keeps the login open.
+const LOGIN_NONCE_LIFETIME_MS = 10 * 60 * 1000;
+
+// The backend sends only a short code on failure, so a link can't make the page show its own text.
+const LOGIN_ERROR_MESSAGES = {
+    unverified: "Your Spotify login could not be verified. Please connect again.",
+    cancelled: "Spotify authorization was cancelled or failed.",
+    "no-code": "Spotify did not return an authorization code.",
+    "not-allowed":
+        "This Spotify account is not allowed to use RabbitHole yet. Only approved accounts can connect for now.",
+    paused: "Spotify has asked RabbitHole to pause requests for a while. Try connecting again later.",
+    failed: "Spotify connection failed. Please try again.",
+    "not-started":
+        "That Spotify login wasn't started in this browser, so it was ignored. Connect Spotify again if you meant to.",
+};
+
+function loginErrorMessage(code) {
+    return Object.hasOwn(LOGIN_ERROR_MESSAGES, code) ? LOGIN_ERROR_MESSAGES[code] : LOGIN_ERROR_MESSAGES.failed;
+}
+
+function startLoginAttempt() {
+    const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+    const nonce = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+    try {
+        window.localStorage.setItem(LOGIN_NONCE_STORAGE_KEY, JSON.stringify({ nonce, startedAt: Date.now() }));
+    } catch {
+        // Without storage the login can't be checked when it returns, so it will be refused.
+    }
+
+    return nonce;
+}
+
+function takeLoginNonce() {
+    try {
+        const saved = JSON.parse(window.localStorage.getItem(LOGIN_NONCE_STORAGE_KEY) || "null");
+        window.localStorage.removeItem(LOGIN_NONCE_STORAGE_KEY);
+
+        if (saved?.nonce && Date.now() - saved.startedAt < LOGIN_NONCE_LIFETIME_MS) {
+            return saved.nonce;
+        }
+    } catch {
+        // Unreadable or blocked storage means there is no login to match.
+    }
+
+    return "";
+}
+
 // The backend redirects here after Spotify login with either #session=... or ?spotify=error.
 // Both are removed from the address bar straight away so the token is not left in history.
 function consumeSpotifyLoginRedirect() {
@@ -67,17 +118,24 @@ function consumeSpotifyLoginRedirect() {
     const query = new URLSearchParams(window.location.search);
     const session = fragment.get("session");
 
+    if (!session && !query.has("spotify")) {
+        return "";
+    }
+
+    window.history.replaceState(null, "", window.location.pathname);
+
+    const expectedNonce = takeLoginNonce();
+
     if (session) {
-        writeSessionToken(session);
+        if (expectedNonce && fragment.get("login") === expectedNonce) {
+            writeSessionToken(session);
+            return "";
+        }
+
+        return loginErrorMessage("not-started");
     }
 
-    if (session || query.has("spotify")) {
-        window.history.replaceState(null, "", window.location.pathname);
-    }
-
-    return query.get("spotify") === "error"
-        ? query.get("message") || "Spotify connection failed. Please try again."
-        : "";
+    return query.get("spotify") === "error" ? loginErrorMessage(query.get("reason")) : "";
 }
 
 const initialLoginError = consumeSpotifyLoginRedirect();
@@ -154,6 +212,21 @@ function StepHeading({ eyebrow, title, description, badge }) {
             {badge && <span className="step-complete">{badge}</span>}
         </div>
     );
+}
+
+// Spotify's design guidelines ask apps to show its icon beside Spotify content and links. It stays
+// in Spotify green and at 21px or larger, the smallest size the guidelines allow.
+function SpotifyIcon() {
+    return (
+        <svg className="spotify-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z" />
+        </svg>
+    );
+}
+
+// Last.fm's terms ask for a link back to the page its data came from. Its URLs use + for spaces.
+function lastFmArtistUrl(artistName) {
+    return `https://www.last.fm/music/${encodeURIComponent(artistName).replace(/%20/g, "+")}`;
 }
 
 function BackButton({ onClick }) {
@@ -549,7 +622,7 @@ function App() {
 
     function connectSpotify() {
         setLoginError("");
-        window.location.href = apiUrl("/api/spotify/login");
+        window.location.href = apiUrl(`/api/spotify/login?nonce=${startLoginAttempt()}`);
     }
 
     async function disconnectSpotify() {
@@ -1065,13 +1138,14 @@ function App() {
     
                                             {artist.spotifyUrl && (
                                                 <a
-                                                    className="text-link artist-spotify-link"
+                                                    className="text-link spotify-link artist-spotify-link"
                                                     href={artist.spotifyUrl}
                                                     target="_blank"
                                                     rel="noreferrer"
                                                     aria-label={`View on Spotify: ${artist.name}`}
                                                 >
-                                                    View on Spotify ↗
+                                                    <SpotifyIcon />
+                                                    View on Spotify
                                                 </a>
                                             )}
                                         </div>
@@ -1106,7 +1180,8 @@ function App() {
 
                                 {selectedSeedArtist && (
                                     <div className="seed-artist">
-                                        {/* Spotify's API has no artist banners, so the photo is cropped into one. */}
+                                        {/* Spotify's API has no artist banners, and its rules forbid cropping or
+                                            covering artwork, so the whole photo sits on a banner-shaped backdrop. */}
                                         <div className="seed-artist-banner" aria-hidden="true">
                                             {selectedSeedArtist.imageUrl ? (
                                                 <img src={selectedSeedArtist.imageUrl} alt="" />
@@ -1122,13 +1197,14 @@ function App() {
 
                                         {selectedSeedArtist.spotifyUrl && (
                                             <a
-                                                className="text-link seed-artist-link"
+                                                className="text-link spotify-link seed-artist-link"
                                                 href={selectedSeedArtist.spotifyUrl}
                                                 target="_blank"
                                                 rel="noreferrer"
                                                 aria-label={`View on Spotify: ${selectedSeedArtist.name}`}
                                             >
-                                                View on Spotify ↗
+                                                <SpotifyIcon />
+                                                View on Spotify
                                             </a>
                                         )}
                                     </div>
@@ -1398,11 +1474,13 @@ function App() {
                             <span>{createdPlaylist.playlistName}</span>
                             <span>{createdPlaylist.trackCount} tracks added</span>
                             <a
+                                className="spotify-link"
                                 href={createdPlaylist.spotifyPlaylistUrl}
                                 target="_blank"
                                 rel="noreferrer"
                             >
-                                Open Spotify Playlist<span aria-hidden="true"> ↗</span>
+                                <SpotifyIcon />
+                                Open Spotify Playlist
                             </a>
                         </div>
                     )}
@@ -1425,7 +1503,18 @@ function App() {
 
                                         <div className="track-title">
                                             <h3>{item.track.name}</h3>
-                                            <p>{item.track.artistName}</p>
+                                            <p>
+                                                <a
+                                                    className="artist-lastfm-link"
+                                                    href={lastFmArtistUrl(item.track.artistName)}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    title="Artist page on Last.fm"
+                                                    aria-label={`${item.track.artistName} on Last.fm`}
+                                                >
+                                                    {item.track.artistName}
+                                                </a>
+                                            </p>
                                         </div>
                                     </div>
 
@@ -1450,13 +1539,14 @@ function App() {
                                     <div className="track-actions">
                                         {spotifyUrl && (
                                             <a
-                                                className="text-link"
+                                                className="text-link spotify-link"
                                                 href={spotifyUrl}
                                                 target="_blank"
                                                 rel="noreferrer"
                                                 aria-label={`Open in Spotify: ${item.track.name}`}
                                             >
-                                                Open in Spotify ↗
+                                                <SpotifyIcon />
+                                                Open in Spotify
                                             </a>
                                         )}
 
@@ -1572,7 +1662,10 @@ function App() {
             <footer className="app-footer">
                 <p>
                     Playlists and music data from{" "}
-                    <a href="https://www.spotify.com" target="_blank" rel="noreferrer">Spotify</a>.
+                    <a className="spotify-link" href="https://www.spotify.com" target="_blank" rel="noreferrer">
+                        <SpotifyIcon />
+                        Spotify
+                    </a>.
                     Listening stats powered by AudioScrobbler from{" "}
                     <a href="https://www.last.fm" target="_blank" rel="noreferrer">Last.fm</a>.
                 </p>

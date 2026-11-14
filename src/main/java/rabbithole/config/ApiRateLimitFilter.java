@@ -152,8 +152,9 @@ public class ApiRateLimitFilter implements WebFilter {
             return new RouteLimit("generate-playlist", 5, siteWideGenerationsPerHour);
         }
 
+        // Each prefetch makes many Last.fm calls, so a visitor gets only a few a minute.
         if (method == HttpMethod.POST && path.equals("/api/playlists/prefetch")) {
-            return new RouteLimit("prefetch", 20, 0);
+            return new RouteLimit("prefetch", 6, 0);
         }
 
         if (method == HttpMethod.POST && path.equals("/api/playlists/replace-track")) {

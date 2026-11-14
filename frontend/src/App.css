@@ -634,44 +634,37 @@ input[type="range"]:focus-visible {
   text-align: center;
 }
 
-/* A wide crop of the artist's photo that fades out behind the label and name. */
+/* A banner-shaped backdrop with the whole photo in the middle. Spotify's rules forbid cropping,
+   filtering or covering its artwork, so the photo is shown as is and the text sits below it. */
 .seed-artist-banner {
-  position: relative;
   width: 100%;
-  height: 170px;
-  margin-bottom: -38px;
-  overflow: hidden;
+  height: 190px;
+  /* Flex rather than grid, so the photo's 100% height resolves to the banner's fixed height. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+  padding: 16px;
   border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--green-soft), var(--tint) 70%, transparent);
 }
 
-/* Faces usually sit in the upper third of artist photos, so the crop favors that area. */
 .seed-artist-banner img {
   display: block;
-  width: 100%;
   height: 100%;
-  object-fit: cover;
-  object-position: center 30%;
-  filter: brightness(0.85);
-  -webkit-mask-image: linear-gradient(180deg, #000 45%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 45%, transparent 100%);
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
 }
 
 /* Used when the artist has no photo. */
 .seed-artist-initial {
-  width: 100%;
   height: 100%;
-  padding-bottom: 40px;
-  background: linear-gradient(135deg, var(--green-faint), var(--tint));
+  aspect-ratio: 1;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
   font-size: 3rem;
-  -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 55%, transparent 100%);
-}
-
-.seed-artist-label,
-.seed-artist-name,
-.seed-artist-link {
-  position: relative;
-  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.6);
 }
 
 .seed-artist-label {
@@ -699,12 +692,12 @@ input[type="range"]:focus-visible {
 }
 
 .completed-step .seed-artist-banner {
-  height: 56px;
-  margin-bottom: -24px;
+  height: 64px;
+  margin-bottom: 6px;
+  padding: 8px;
 }
 
 .completed-step .seed-artist-initial {
-  padding-bottom: 20px;
   font-size: 1.4rem;
 }
 
@@ -954,6 +947,32 @@ input[type="range"]:focus-visible {
 
 .success a:hover,
 .text-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* Links to Spotify lead with its icon, as Spotify's design guidelines ask. */
+.spotify-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+
+/* 21px is the smallest size Spotify allows for its icon. */
+.spotify-icon {
+  width: 21px;
+  height: 21px;
+  flex: none;
+  fill: var(--green-bright);
+}
+
+.artist-lastfm-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.artist-lastfm-link:hover {
   color: var(--text);
   text-decoration: underline;
 }

@@ -771,6 +771,19 @@ input[type="range"]:focus-visible {
   margin-top: 14px;
 }
 
+.advanced-toggle:hover:not(:disabled) {
+  background: var(--tint);
+}
+
+/* Growing a full-width button on hover pushes it past the card's edges, and browsers can leave
+   traces of its outline behind, so these change color only. */
+.advanced-toggle:hover:not(:disabled),
+.advanced-toggle:active:not(:disabled),
+.spotify-button:hover:not(:disabled),
+.spotify-button:active:not(:disabled) {
+  transform: none;
+}
+
 .advanced-settings {
   display: flex;
   flex-direction: column;
@@ -1215,6 +1228,13 @@ input[type="range"]:focus-visible {
   .results-actions .button {
     width: 100%;
     margin: 0;
+  }
+
+  /* Full width here, so they don't grow on hover either (see .advanced-toggle). */
+  .step-actions .button:hover:not(:disabled),
+  .search-button:hover:not(:disabled),
+  .results-actions .button:hover:not(:disabled) {
+    transform: none;
   }
 
   .final-actions .generate-button {

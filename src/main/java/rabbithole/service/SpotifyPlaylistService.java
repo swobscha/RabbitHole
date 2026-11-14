@@ -41,12 +41,14 @@ public class SpotifyPlaylistService {
     public SpotifyPlaylistService(
             SpotifyAuthService spotifyAuthService,
             PlaylistHistoryService playlistHistoryService,
+            SpotifyRateLimitGuard rateLimitGuard,
             @Value("${SPOTIFY_API_URL:https://api.spotify.com/v1}") String apiUrl
     ) {
         this.spotifyAuthService = spotifyAuthService;
         this.playlistHistoryService = playlistHistoryService;
         this.webClient = WebClient.builder()
                 .baseUrl(apiUrl)
+                .filter(rateLimitGuard.filter())
                 .build();
     }
 

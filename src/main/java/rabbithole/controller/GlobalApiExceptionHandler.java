@@ -14,6 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 import rabbithole.model.ApiErrorResponse;
+import rabbithole.service.SpotifyRateLimitGuard;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -23,6 +24,12 @@ import java.util.concurrent.TimeoutException;
 public class GlobalApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalApiExceptionHandler.class);
+
+    private final SpotifyRateLimitGuard spotifyRateLimitGuard;
+
+    public GlobalApiExceptionHandler(SpotifyRateLimitGuard spotifyRateLimitGuard) {
+        this.spotifyRateLimitGuard = spotifyRateLimitGuard;
+    }
 
     @ExceptionHandler(ResponseStatusException.class)
     public Mono<ResponseEntity<ApiErrorResponse>> handleResponseStatusException(
@@ -51,7 +58,10 @@ public class GlobalApiExceptionHandler {
 
         String message = "An external music service returned an error.";
 
-        if (statusCode.value() == 429) {
+        if (statusCode.value() == 429 && spotifyRateLimitGuard.isPaused()) {
+            // Spotify said to wait; the shared guard has started the pause and words it plainly.
+            message = spotifyRateLimitGuard.pausedError().getReason();
+        } else if (statusCode.value() == 429) {
             String retryAfter = error.getHeaders().getFirst("Retry-After");
 
             if (retryAfter != null && !retryAfter.isBlank()) {

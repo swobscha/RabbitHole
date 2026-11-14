@@ -179,6 +179,9 @@ function App() {
     const [advancedOpen, setAdvancedOpen] = useState(false);
 
     const [spotifyConnected, setSpotifyConnected] = useState(false);
+    // When Spotify's requested pause ends (epoch ms), or 0. Searching and generating wait until then.
+    const [spotifyPausedUntil, setSpotifyPausedUntil] = useState(0);
+    const spotifyPaused = spotifyPausedUntil > 0;
     const [loginError, setLoginError] = useState(initialLoginError);
     const [wizardStage, setUiStage] = useState(2);
     const uiStage = wizardStage;
@@ -195,8 +198,7 @@ function App() {
     const [lastGenerationRequest, setLastGenerationRequest] = useState(null);
 
     const [loading, setLoading] = useState(false);
-    const [generationStartedAt, setGenerationStartedAt] = useState(0);
-    const [clock, setClock] = useState(0);
+    const [generationSeconds, setGenerationSeconds] = useState(0);
     const [creating, setCreating] = useState(false);
     const [replacingTrackIndex, setReplacingTrackIndex] = useState(null);
     const [previewTrackUri, setPreviewTrackUri] = useState(null);
@@ -234,6 +236,11 @@ function App() {
         }
 
         const response = await fetch(apiUrl(path), { ...options, headers });
+
+        // Spotify may have just asked RabbitHole to pause; the status check says until when.
+        if (response.status === 429) {
+            checkSpotifyStatus();
+        }
 
         // Only someone who was logged in can lose a connection; logged-out features never return 401.
         if (response.status === 401 && token) {
@@ -433,6 +440,7 @@ function App() {
             }
 
             setSpotifyConnected(data.connected);
+            setSpotifyPausedUntil(Number(data.spotifyPausedUntil) || 0);
 
             if (data.connected) {
                 fetchPlaylistHistory();
@@ -534,7 +542,7 @@ function App() {
 
         event.preventDefault();
 
-        if (!artistSearchLoading) {
+        if (!artistSearchLoading && !spotifyPaused) {
             searchSeedArtists({ selectTopMatch: true });
         }
     }
@@ -591,18 +599,32 @@ function App() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Ticks twice a second while generating, to move the progress message along.
+    // Clears the pause notice when Spotify's pause ends, without waiting for the next status check.
+    useEffect(() => {
+        if (!spotifyPausedUntil) {
+            return undefined;
+        }
+
+        const timer = setTimeout(() => setSpotifyPausedUntil(0), Math.max(0, spotifyPausedUntil - Date.now()));
+
+        return () => clearTimeout(timer);
+    }, [spotifyPausedUntil]);
+
+    // Counts the seconds while generating, twice a second, to move the progress message along.
     useEffect(() => {
         if (!loading) {
             return undefined;
         }
 
-        const timer = setInterval(() => setClock(Date.now()), 500);
+        const startedAt = Date.now();
+        const timer = setInterval(() => setGenerationSeconds((Date.now() - startedAt) / 1000), 500);
 
-        return () => clearInterval(timer);
+        return () => {
+            clearInterval(timer);
+            setGenerationSeconds(0);
+        };
     }, [loading]);
 
-    const generationSeconds = Math.max(0, (clock - generationStartedAt) / 1000);
     const generationMessage = GENERATION_STAGES.findLast((stage) => generationSeconds >= stage.after).message;
 
     async function generatePlaylist(event) {
@@ -614,7 +636,6 @@ function App() {
         }
 
         setLoading(true);
-        setGenerationStartedAt(Date.now());
         setError("");
         setCreateError("");
         setReplaceError("");
@@ -904,6 +925,20 @@ function App() {
                 </div>
             </header>
 
+            {spotifyPaused && (
+                <p className="notice pause-notice" role="status">
+                    Spotify has paused RabbitHole&apos;s requests until{" "}
+                    <strong>
+                        {new Date(spotifyPausedUntil).toLocaleString([], {
+                            weekday: "short",
+                            hour: "numeric",
+                            minute: "2-digit",
+                        })}
+                    </strong>
+                    . This is a limit on Spotify&apos;s side, so new playlists can&apos;t be made until then.
+                </p>
+            )}
+
             <div className="wizard">
                 <section className="wizard-step">
                     <StepHeading
@@ -971,7 +1006,7 @@ function App() {
                                     type="button"
                                     className="button button-primary search-button"
                                     onClick={() => searchSeedArtists()}
-                                    disabled={artistSearchLoading}
+                                    disabled={artistSearchLoading || spotifyPaused}
                                 >
                                     {artistSearchLoading ? "Searching..." : "Find Matching Artists"}
                                 </button>
@@ -1051,7 +1086,7 @@ function App() {
                                             type="button"
                                             className="button button-secondary"
                                             onClick={() => searchSeedArtists()}
-                                            disabled={artistSearchLoading}
+                                            disabled={artistSearchLoading || spotifyPaused}
                                         >
                                             {artistSearchLoading ? "Searching..." : "Search Again"}
                                         </button>
@@ -1279,7 +1314,7 @@ function App() {
                                     <button
                                         type="submit"
                                         className="button button-primary generate-button"
-                                        disabled={loading || !selectedSeedArtist}
+                                        disabled={loading || !selectedSeedArtist || spotifyPaused}
                                     >
                                         {loading ? "Generating..." : "Generate Playlist"}
                                     </button>
@@ -1327,7 +1362,7 @@ function App() {
                                     type="button"
                                     className="button button-primary"
                                     onClick={createPlaylist}
-                                    disabled={creating || playlist.tracks.length === 0}
+                                    disabled={creating || playlist.tracks.length === 0 || spotifyPaused}
                                 >
                                     {creating ? "Creating..." : "Create on Spotify"}
                                 </button>
@@ -1446,7 +1481,7 @@ function App() {
                                             className="button button-secondary button-small"
                                             aria-label={`${replacingTrackIndex === index ? "Replacing" : "Replace"} ${item.track.name}`}
                                             onClick={() => replaceTrack(index)}
-                                            disabled={replacingTrackIndex !== null}
+                                            disabled={replacingTrackIndex !== null || spotifyPaused}
                                         >
                                             {replacingTrackIndex === index ? "Replacing..." : "Replace"}
                                         </button>

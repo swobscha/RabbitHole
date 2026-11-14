@@ -31,6 +31,11 @@ final class FakeMusicApis {
 
     final AtomicInteger appTokenRequests = new AtomicInteger();
     final AtomicInteger maxConcurrentTrackSearches = new AtomicInteger();
+    final AtomicInteger trackSearchRequests = new AtomicInteger();
+    final AtomicInteger artistSearchRequests = new AtomicInteger();
+
+    /** When above 0, track searches answer 429 with this Retry-After, as Spotify does when limiting an app. */
+    volatile int trackSearchRetryAfterSeconds = 0;
 
     private final AtomicInteger concurrentTrackSearches = new AtomicInteger();
 
@@ -104,9 +109,18 @@ final class FakeMusicApis {
         Map<String, String> query = parseQuery(exchange.getRequestURI().getRawQuery());
 
         if ("artist".equals(query.get("type"))) {
+            artistSearchRequests.incrementAndGet();
             respond(exchange, 200, """
                     {"artists":{"items":[{"id":"artist-1","name":"%s","images":[],"followers":{"total":1},"genres":[],"external_urls":{}}]}}
                     """.formatted(query.get("q")));
+            return;
+        }
+
+        trackSearchRequests.incrementAndGet();
+
+        if (trackSearchRetryAfterSeconds > 0) {
+            exchange.getResponseHeaders().set("Retry-After", String.valueOf(trackSearchRetryAfterSeconds));
+            respond(exchange, 429, "{\"error\":{\"status\":429,\"message\":\"API rate limit exceeded\"}}");
             return;
         }
 

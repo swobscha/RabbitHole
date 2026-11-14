@@ -26,8 +26,6 @@ public class SpotifyTrackSearchService {
 
     private static final Logger log = LoggerFactory.getLogger(SpotifyTrackSearchService.class);
 
-    private static final long DEFAULT_SPOTIFY_BACKOFF_SECONDS = 30;
-
     private static final int MIN_TRACK_MATCH_SCORE = 50;
     private static final int MIN_ARTIST_MATCH_SCORE = 55;
     private static final int MIN_TOTAL_MATCH_SCORE = 115;
@@ -36,6 +34,10 @@ public class SpotifyTrackSearchService {
     private static final Duration CACHE_LIFETIME = Duration.ofHours(24);
 
     private final WebClient webClient;
+    private final SpotifyRateLimitGuard rateLimitGuard;
+    private final SpotifyTrackMatchStore matchStore;
+
+    // In front of the database copy, so repeat lookups during one generation stay in memory.
     private final Cache<String, String> uriCache = Caffeine.newBuilder()
             .maximumSize(MAX_CACHE_ENTRIES)
             .expireAfterWrite(CACHE_LIFETIME)
@@ -45,36 +47,30 @@ public class SpotifyTrackSearchService {
             .expireAfterWrite(CACHE_LIFETIME)
             .build();
 
-    private volatile long spotifyRateLimitedUntilMs = 0;
-
     public SpotifyTrackSearchService(
+            SpotifyRateLimitGuard rateLimitGuard,
+            SpotifyTrackMatchStore matchStore,
             @Value("${SPOTIFY_API_URL:https://api.spotify.com/v1}") String apiUrl
     ) {
+        this.rateLimitGuard = rateLimitGuard;
+        this.matchStore = matchStore;
         this.webClient = WebClient.builder()
                 .baseUrl(apiUrl)
+                .filter(rateLimitGuard.filter())
                 .build();
     }
 
-    public Mono<String> findSpotifyUri(
+    /**
+     * Finds the Spotify track for a candidate: from memory, then from the database, and only then by
+     * searching Spotify. {@link TrackMatch#searchedSpotify()} says whether a Spotify search was spent.
+     */
+    public Mono<TrackMatch> findSpotifyUri(
             String accessToken,
             TrackCandidate track,
             String requiredSpotifyArtistId
     ) {
         if (track.spotifyUri() != null && !track.spotifyUri().isBlank()) {
-            return Mono.just(track.spotifyUri());
-        }
-
-        if (isSpotifyRateLimited()) {
-            long secondsLeft = secondsUntilSpotifyReady();
-
-            log.warn("Spotify search skipped during a rate-limit cooldown | secondsLeft={}", secondsLeft);
-
-            return Mono.error(new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS,
-                    "Spotify is rate-limiting searches. Wait about "
-                            + secondsLeft
-                            + " seconds and try again."
-            ));
+            return Mono.just(TrackMatch.remembered(track.spotifyUri()));
         }
 
         String cleanRequiredArtistId = requiredSpotifyArtistId == null
@@ -90,32 +86,70 @@ public class SpotifyTrackSearchService {
         String cachedUri = uriCache.getIfPresent(cacheKey);
 
         if (cachedUri != null) {
-            return Mono.just(cachedUri);
+            return Mono.just(TrackMatch.remembered(cachedUri));
         }
 
         if (missCache.getIfPresent(cacheKey) != null) {
-            return Mono.empty();
+            return Mono.just(TrackMatch.remembered(null));
         }
 
-        return searchSpotifyOnce(
-                accessToken,
-                track.artistName(),
-                track.name(),
-                cleanRequiredArtistId
-        )
-                .flatMap(result -> {
+        return matchStore.find(cacheKey)
+                .map(stored -> {
+                    rememberInMemory(cacheKey, stored.spotifyUri());
+                    return TrackMatch.remembered(stored.spotifyUri());
+                })
+                .switchIfEmpty(Mono.defer(() -> searchAndRemember(accessToken, track, cleanRequiredArtistId, cacheKey)));
+    }
+
+    /** Clears the in-memory copies, as a restart would. The database copy stays. */
+    public void forgetCachedMatches() {
+        uriCache.invalidateAll();
+        missCache.invalidateAll();
+    }
+
+    private Mono<TrackMatch> searchAndRemember(
+            String accessToken,
+            TrackCandidate track,
+            String requiredSpotifyArtistId,
+            String cacheKey
+    ) {
+        Mono<TrackMatch> search = searchSpotifyOnce(accessToken, track.artistName(), track.name(), requiredSpotifyArtistId)
+                .map(result -> {
                     if (result.hasUri()) {
-                        uriCache.put(cacheKey, result.uri());
-                        return Mono.just(result.uri());
+                        rememberInMemory(cacheKey, result.uri());
+                        matchStore.save(cacheKey, result.uri());
+                        return TrackMatch.searched(result.uri());
                     }
 
+                    // A failed request isn't remembered, so the song can be tried again later.
                     if (result.definitiveMiss()) {
-                        missCache.put(cacheKey, Boolean.TRUE);
+                        rememberInMemory(cacheKey, null);
+                        matchStore.save(cacheKey, null);
                     }
 
                     log.debug("Spotify could not resolve | artist={} | track={}", track.artistName(), track.name());
-                    return Mono.empty();
-                });
+                    return TrackMatch.searched(null);
+                })
+                .cache();
+
+        // Searches still running when a playlist fills up are no longer waited for, but Spotify has
+        // already counted them, so they're finished and saved anyway instead of being thrown away.
+        search.subscribe(
+                ignored -> {
+                },
+                ignored -> {
+                }
+        );
+
+        return search;
+    }
+
+    private void rememberInMemory(String cacheKey, String spotifyUri) {
+        if (spotifyUri == null) {
+            missCache.put(cacheKey, Boolean.TRUE);
+        } else {
+            uriCache.put(cacheKey, spotifyUri);
+        }
     }
 
     private Mono<LookupResult> searchSpotifyOnce(
@@ -251,6 +285,11 @@ public class SpotifyTrackSearchService {
     }
 
     private Mono<LookupResult> handleSpotifyError(Throwable error, String query) {
+        // Includes the shared pause, which must stop the generation rather than count as a miss.
+        if (error instanceof ResponseStatusException statusException) {
+            return Mono.error(statusException);
+        }
+
         if (error instanceof WebClientResponseException responseException) {
             int status = responseException.getStatusCode().value();
 
@@ -261,20 +300,9 @@ public class SpotifyTrackSearchService {
                     responseException.getResponseBodyAsString()
             );
 
+            // The shared guard has already started the pause Spotify asked for.
             if (status == 429) {
-                long retryAfterSeconds = responseException.getHeaders()
-                        .getFirst("Retry-After") == null
-                        ? DEFAULT_SPOTIFY_BACKOFF_SECONDS
-                        : parseRetryAfter(responseException.getHeaders().getFirst("Retry-After"));
-
-                spotifyRateLimitedUntilMs = System.currentTimeMillis() + (retryAfterSeconds * 1000);
-
-                return Mono.error(new ResponseStatusException(
-                        HttpStatus.TOO_MANY_REQUESTS,
-                        "Spotify is rate-limiting searches. Wait about "
-                                + retryAfterSeconds
-                                + " seconds and try again."
-                ));
+                return Mono.error(rateLimitGuard.pausedError());
             }
 
             if (status == 401) {
@@ -483,28 +511,6 @@ public class SpotifyTrackSearchService {
                 || token.equals("version");
     }
 
-    private long parseRetryAfter(String value) {
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException error) {
-            return DEFAULT_SPOTIFY_BACKOFF_SECONDS;
-        }
-    }
-
-    private boolean isSpotifyRateLimited() {
-        return System.currentTimeMillis() < spotifyRateLimitedUntilMs;
-    }
-
-    private long secondsUntilSpotifyReady() {
-        long remainingMs = spotifyRateLimitedUntilMs - System.currentTimeMillis();
-
-        if (remainingMs <= 0) {
-            return 0;
-        }
-
-        return Math.max(1, remainingMs / 1000);
-    }
-
     private String cacheKey(
             String requiredSpotifyArtistId,
             String artistName,
@@ -515,6 +521,17 @@ public class SpotifyTrackSearchService {
                 + TrackText.simplify(artistName)
                 + "|"
                 + TrackText.searchTitle(artistName, trackName);
+    }
+
+    /** spotifyUri is null when there is no match; searchedSpotify is false for remembered answers. */
+    public record TrackMatch(String spotifyUri, boolean searchedSpotify) {
+        static TrackMatch remembered(String spotifyUri) {
+            return new TrackMatch(spotifyUri, false);
+        }
+
+        static TrackMatch searched(String spotifyUri) {
+            return new TrackMatch(spotifyUri, true);
+        }
     }
 
     private record LookupResult(

@@ -847,6 +847,11 @@ input[type="range"]:focus-visible {
   background: var(--warning-bg);
 }
 
+/* Sits between the header and the steps while Spotify has paused RabbitHole. */
+.pause-notice {
+  margin: 0 0 14px;
+}
+
 .disconnect-button {
   margin-top: 10px;
 }

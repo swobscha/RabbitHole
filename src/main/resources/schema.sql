@@ -39,3 +39,17 @@ CREATE TABLE IF NOT EXISTS spotify_sessions (
     refresh_token_enc VARCHAR(2000) NOT NULL,
     last_used_at BIGINT NOT NULL
 );
+
+-- When Spotify last told RabbitHole to stop sending requests (one row, id 1), so a restart remembers it.
+CREATE TABLE IF NOT EXISTS spotify_pause (
+    id INT PRIMARY KEY,
+    paused_until BIGINT NOT NULL
+);
+
+-- Songs already looked up on Spotify, keyed by a hash of the lookup, so restarts don't repeat searches.
+-- A null spotify_uri records that Spotify had no match.
+CREATE TABLE IF NOT EXISTS spotify_track_matches (
+    id VARCHAR(64) PRIMARY KEY,
+    spotify_uri VARCHAR(100),
+    checked_at BIGINT NOT NULL
+);

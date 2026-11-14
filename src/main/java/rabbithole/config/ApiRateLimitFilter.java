@@ -30,21 +30,31 @@ public class ApiRateLimitFilter implements WebFilter {
     private static final Logger log = LoggerFactory.getLogger(ApiRateLimitFilter.class);
 
     private static final long WINDOW_MS = 60_000L;
+    private static final long HOUR_MS = 3_600_000L;
     private static final long CLEANUP_INTERVAL_MS = 60_000L;
 
     private final Map<String, WindowCounter> counters = new ConcurrentHashMap<>();
 
+    // Shared by every visitor: Spotify limits searches for the whole app, not per person.
+    private final Map<String, WindowCounter> siteWideCounters = new ConcurrentHashMap<>();
+
     private final SpotifyAuthService spotifyAuthService;
     private final int trustedProxyHops;
+    private final int siteWideGenerationsPerHour;
+    private final int siteWideReplacementsPerHour;
 
     private volatile long lastCleanupMs = System.currentTimeMillis();
 
     public ApiRateLimitFilter(
             SpotifyAuthService spotifyAuthService,
-            @Value("${RATE_LIMIT_TRUSTED_PROXY_HOPS:0}") int trustedProxyHops
+            @Value("${RATE_LIMIT_TRUSTED_PROXY_HOPS:0}") int trustedProxyHops,
+            @Value("${SITE_WIDE_GENERATIONS_PER_HOUR:30}") int siteWideGenerationsPerHour,
+            @Value("${SITE_WIDE_REPLACEMENTS_PER_HOUR:120}") int siteWideReplacementsPerHour
     ) {
         this.spotifyAuthService = spotifyAuthService;
         this.trustedProxyHops = trustedProxyHops;
+        this.siteWideGenerationsPerHour = siteWideGenerationsPerHour;
+        this.siteWideReplacementsPerHour = siteWideReplacementsPerHour;
     }
 
     @Override
@@ -81,21 +91,53 @@ public class ApiRateLimitFilter implements WebFilter {
 
         boolean allowed = counter.tryConsume(routeLimit.maxRequests(), WINDOW_MS);
 
-        if (allowed) {
-            return chain.filter(exchange);
+        if (!allowed) {
+            long retryAfterSeconds = counter.retryAfterSeconds(WINDOW_MS);
+
+            log.warn(
+                    "Rate limit reached | route={} | client={} | maxRequestsPerMinute={} | retryAfterSeconds={}",
+                    routeLimit.name(),
+                    client,
+                    routeLimit.maxRequests(),
+                    retryAfterSeconds
+            );
+
+            return writeRateLimitResponse(
+                    exchange,
+                    routeLimit,
+                    retryAfterSeconds,
+                    "Too many requests. Wait about " + retryAfterSeconds + " seconds and try again."
+            );
         }
 
-        long retryAfterSeconds = counter.retryAfterSeconds(WINDOW_MS);
+        if (routeLimit.siteWidePerHour() > 0) {
+            WindowCounter siteWide = siteWideCounters.computeIfAbsent(
+                    routeLimit.name(),
+                    ignored -> new WindowCounter(System.currentTimeMillis())
+            );
 
-        log.warn(
-                "Rate limit reached | route={} | client={} | maxRequestsPerMinute={} | retryAfterSeconds={}",
-                routeLimit.name(),
-                client,
-                routeLimit.maxRequests(),
-                retryAfterSeconds
-        );
+            if (!siteWide.tryConsume(routeLimit.siteWidePerHour(), HOUR_MS)) {
+                long retryAfterSeconds = siteWide.retryAfterSeconds(HOUR_MS);
+                long minutes = Math.max(1, Math.round(retryAfterSeconds / 60.0));
 
-        return writeRateLimitResponse(exchange, routeLimit, retryAfterSeconds);
+                log.warn(
+                        "Site-wide hourly limit reached | route={} | maxPerHour={} | retryAfterSeconds={}",
+                        routeLimit.name(),
+                        routeLimit.siteWidePerHour(),
+                        retryAfterSeconds
+                );
+
+                return writeRateLimitResponse(
+                        exchange,
+                        routeLimit,
+                        retryAfterSeconds,
+                        "RabbitHole has reached its hourly limit, which keeps it within Spotify's limits. "
+                                + "Try again in about " + minutes + (minutes == 1 ? " minute." : " minutes.")
+                );
+            }
+        }
+
+        return chain.filter(exchange);
     }
 
     private RouteLimit routeLimitFor(ServerWebExchange exchange) {
@@ -103,35 +145,35 @@ public class ApiRateLimitFilter implements WebFilter {
         String path = exchange.getRequest().getPath().value();
 
         if (method == HttpMethod.POST && path.equals("/api/playlists/generate")) {
-            return new RouteLimit("generate-playlist", 5);
+            return new RouteLimit("generate-playlist", 5, siteWideGenerationsPerHour);
         }
 
         if (method == HttpMethod.GET && path.equals("/api/playlists/demo")) {
-            return new RouteLimit("generate-playlist", 5);
+            return new RouteLimit("generate-playlist", 5, siteWideGenerationsPerHour);
         }
 
         if (method == HttpMethod.POST && path.equals("/api/playlists/prefetch")) {
-            return new RouteLimit("prefetch", 20);
+            return new RouteLimit("prefetch", 20, 0);
         }
 
         if (method == HttpMethod.POST && path.equals("/api/playlists/replace-track")) {
-            return new RouteLimit("replace-track", 15);
+            return new RouteLimit("replace-track", 15, siteWideReplacementsPerHour);
         }
 
         if (method == HttpMethod.POST && path.equals("/api/playlists/create")) {
-            return new RouteLimit("create-playlist", 10);
+            return new RouteLimit("create-playlist", 10, 0);
         }
 
         if (method == HttpMethod.GET && path.equals("/api/spotify/artists/search")) {
-            return new RouteLimit("artist-search", 30);
+            return new RouteLimit("artist-search", 30, 0);
         }
 
         if (method == HttpMethod.GET && path.equals("/api/spotify/login")) {
-            return new RouteLimit("spotify-login", 30);
+            return new RouteLimit("spotify-login", 30, 0);
         }
 
         if (method == HttpMethod.DELETE && path.equals("/api/playlists/history")) {
-            return new RouteLimit("clear-history", 5);
+            return new RouteLimit("clear-history", 5, 0);
         }
 
         return null;
@@ -140,16 +182,17 @@ public class ApiRateLimitFilter implements WebFilter {
     private Mono<Void> writeRateLimitResponse(
             ServerWebExchange exchange,
             RouteLimit routeLimit,
-            long retryAfterSeconds
+            long retryAfterSeconds,
+            String message
     ) {
         String path = exchange.getRequest().getPath().value();
 
         String body = "{"
                 + "\"status\":429,"
                 + "\"error\":\"Too Many Requests\","
-                + "\"message\":\"Too many requests. Wait about "
-                + retryAfterSeconds
-                + " seconds and try again.\","
+                + "\"message\":\""
+                + escapeJson(message)
+                + "\","
                 + "\"path\":\""
                 + escapeJson(path)
                 + "\","
@@ -221,9 +264,11 @@ public class ApiRateLimitFilter implements WebFilter {
                 .replace("\"", "\\\"");
     }
 
+    /** maxRequests is per visitor per minute; siteWidePerHour is shared by everyone, or 0 for none. */
     private record RouteLimit(
             String name,
-            int maxRequests
+            int maxRequests,
+            int siteWidePerHour
     ) {
     }
 

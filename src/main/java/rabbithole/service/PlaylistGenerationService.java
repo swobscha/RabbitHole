@@ -38,9 +38,12 @@ public class PlaylistGenerationService {
 
     private static final int DISCOVERY_BATCH_SIZE = 100;
     private static final int MAX_DISCOVERY_ROUNDS = 20;
-    private static final int MIN_SPOTIFY_LOOKUP_ATTEMPTS = 60;
-    private static final int SPOTIFY_LOOKUP_ATTEMPTS_PER_TRACK = 3;
-    private static final int SPOTIFY_LOOKUP_CONCURRENCY = 5;
+    // Spotify limits searches per app, so each playlist gets a small budget of real searches.
+    // Songs already matched before (in memory or the database) don't use it.
+    private static final int MIN_SPOTIFY_LOOKUP_ATTEMPTS = 12;
+    private static final double SPOTIFY_LOOKUPS_PER_TRACK = 1.5;
+    private static final int REPLACEMENT_LOOKUP_ATTEMPTS = 8;
+    private static final int SPOTIFY_LOOKUP_CONCURRENCY = 3;
 
     private static final int MIN_PLAYLIST_SIZE = 1;
     private static final int MAX_PLAYLIST_SIZE = 50;
@@ -210,7 +213,7 @@ public class PlaylistGenerationService {
         ValidationState state = new ValidationState(
                 1,
                 maxTracksPerArtist(original, original.playlistSize()),
-                lookupAttemptsFor(original.playlistSize())
+                REPLACEMENT_LOOKUP_ATTEMPTS
         );
 
         blockCurrentTracks(state, request);
@@ -243,7 +246,7 @@ public class PlaylistGenerationService {
     }
 
     private int lookupAttemptsFor(int playlistSize) {
-        return Math.max(MIN_SPOTIFY_LOOKUP_ATTEMPTS, playlistSize * SPOTIFY_LOOKUP_ATTEMPTS_PER_TRACK);
+        return Math.max(MIN_SPOTIFY_LOOKUP_ATTEMPTS, (int) Math.ceil(playlistSize * SPOTIFY_LOOKUPS_PER_TRACK));
     }
 
     private void blockCurrentTracks(ValidationState state, PlaylistReplaceTrackRequest request) {
@@ -399,8 +402,7 @@ public class PlaylistGenerationService {
                                         lookup.weightedTrack().track(),
                                         lookup.requiredSpotifyArtistId()
                                 )
-                                .map(lookup::withSpotifyUri)
-                                .defaultIfEmpty(lookup),
+                                .map(lookup::withMatch),
                         SPOTIFY_LOOKUP_CONCURRENCY
                 )
                 .doOnNext(lookup -> applyLookup(lookup, state))
@@ -464,7 +466,8 @@ public class PlaylistGenerationService {
                     key,
                     artistKey,
                     requiredSpotifyArtistIdForCandidate(request, weightedTrack.track()),
-                    null
+                    null,
+                    false
             );
         }
     }
@@ -472,6 +475,11 @@ public class PlaylistGenerationService {
     private void applyLookup(SpotifyLookup lookup, ValidationState state) {
         synchronized (state) {
             state.pendingArtistLookups.merge(lookup.artistKey(), -1, Integer::sum);
+
+            // Only real Spotify searches use the budget; a remembered answer gives its slot back.
+            if (!lookup.searchedSpotify()) {
+                state.attemptsRemaining++;
+            }
 
             if (lookup.spotifyUri() == null) {
                 state.spotifyMissed++;
@@ -965,10 +973,18 @@ public class PlaylistGenerationService {
             String key,
             String artistKey,
             String requiredSpotifyArtistId,
-            String spotifyUri
+            String spotifyUri,
+            boolean searchedSpotify
     ) {
-        private SpotifyLookup withSpotifyUri(String uri) {
-            return new SpotifyLookup(weightedTrack, key, artistKey, requiredSpotifyArtistId, uri);
+        private SpotifyLookup withMatch(SpotifyTrackSearchService.TrackMatch match) {
+            return new SpotifyLookup(
+                    weightedTrack,
+                    key,
+                    artistKey,
+                    requiredSpotifyArtistId,
+                    match.spotifyUri(),
+                    match.searchedSpotify()
+            );
         }
     }
 }

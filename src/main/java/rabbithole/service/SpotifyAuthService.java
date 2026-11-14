@@ -63,6 +63,7 @@ public class SpotifyAuthService {
             SpotifySessionStore sessionStore,
             PlaylistHistoryService playlistHistoryService,
             SpotifyAppTokenService spotifyAppTokenService,
+            SpotifyRateLimitGuard rateLimitGuard,
             @Value("${SPOTIFY_ACCOUNTS_URL:https://accounts.spotify.com}") String accountsUrl,
             @Value("${SPOTIFY_API_URL:https://api.spotify.com/v1}") String apiUrl
     ) {
@@ -70,7 +71,8 @@ public class SpotifyAuthService {
         this.playlistHistoryService = playlistHistoryService;
         this.spotifyAppTokenService = spotifyAppTokenService;
         this.accountsWebClient = WebClient.builder().baseUrl(accountsUrl).build();
-        this.apiWebClient = WebClient.builder().baseUrl(apiUrl).build();
+        // Web API requests share Spotify's per-app limit; login tokens come from a separate service.
+        this.apiWebClient = WebClient.builder().baseUrl(apiUrl).filter(rateLimitGuard.filter()).build();
         this.authorizeUrl = accountsUrl + "/authorize";
     }
 

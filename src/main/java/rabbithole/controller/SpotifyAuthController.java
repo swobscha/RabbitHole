@@ -19,6 +19,7 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 import rabbithole.service.SpotifyAuthService;
+import rabbithole.service.SpotifyRateLimitGuard;
 
 import java.net.URI;
 import java.net.URLEncoder;
@@ -37,12 +38,14 @@ public class SpotifyAuthController {
     private static final Duration LOGIN_STATE_LIFETIME = Duration.ofMinutes(10);
 
     private final SpotifyAuthService spotifyAuthService;
+    private final SpotifyRateLimitGuard spotifyRateLimitGuard;
 
     @Value("${FRONTEND_URL:http://localhost:5173}")
     private String frontendUrl;
 
-    public SpotifyAuthController(SpotifyAuthService spotifyAuthService) {
+    public SpotifyAuthController(SpotifyAuthService spotifyAuthService, SpotifyRateLimitGuard spotifyRateLimitGuard) {
         this.spotifyAuthService = spotifyAuthService;
+        this.spotifyRateLimitGuard = spotifyRateLimitGuard;
     }
 
     @GetMapping("/login")
@@ -102,7 +105,9 @@ public class SpotifyAuthController {
                 .map(connected -> Map.of(
                         "connected", connected,
                         "configured", spotifyAuthService.isConfigured(),
-                        "redirectUri", spotifyAuthService.configuredRedirectUri()
+                        "redirectUri", spotifyAuthService.configuredRedirectUri(),
+                        // When Spotify's requested pause ends (epoch ms), or 0, so the page can warn visitors up front.
+                        "spotifyPausedUntil", spotifyRateLimitGuard.pausedUntilMs()
                 ));
     }
 

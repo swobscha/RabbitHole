@@ -19,6 +19,7 @@ import rabbithole.model.PlaylistReplaceTrackResult;
 import rabbithole.model.SpotifySession;
 import rabbithole.model.WeightedTrack;
 import rabbithole.service.SpotifySessionStore;
+import rabbithole.service.SpotifyTrackSearchService;
 
 import java.io.IOException;
 import java.net.URI;
@@ -50,6 +51,8 @@ import static org.junit.jupiter.api.Assertions.fail;
         "CORS_ALLOWED_ORIGINS=http://frontend.test",
         "lastfm.api-key=test-key",
         "RATE_LIMIT_TRUSTED_PROXY_HOPS=0",
+        "SITE_WIDE_GENERATIONS_PER_HOUR=1000",
+        "SITE_WIDE_REPLACEMENTS_PER_HOUR=1000",
         "DEBUG_RANKINGS_ENABLED=false"
 })
 class ApiFlowIntegrationTest {
@@ -67,6 +70,9 @@ class ApiFlowIntegrationTest {
 
     @Autowired
     private DatabaseClient databaseClient;
+
+    @Autowired
+    private SpotifyTrackSearchService spotifyTrackSearchService;
 
     @DynamicPropertySource
     static void pointAtFakeApis(DynamicPropertyRegistry registry) {
@@ -418,6 +424,91 @@ class ApiFlowIntegrationTest {
                 .expectStatus().isBadRequest();
     }
 
+    @Test
+    void spotifyAskingToPauseStopsEverySpotifyRequestUntilItEnds() {
+        String seed = "Pause " + uniqueCode();
+        FAKE.trackSearchRetryAfterSeconds = 2;
+
+        try {
+            Map<?, ?> error = client().post().uri("/api/playlists/generate")
+                    .bodyValue(generationRequest(seed, 3))
+                    .exchange()
+                    .expectStatus().isEqualTo(429)
+                    .expectBody(Map.class)
+                    .returnResult()
+                    .getResponseBody();
+
+            assertTrue(String.valueOf(error.get("message")).contains("Spotify has paused requests from RabbitHole"));
+        } finally {
+            FAKE.trackSearchRetryAfterSeconds = 0;
+        }
+
+        // The page can show when the pause ends, and it's saved so a restart remembers it.
+        Map<?, ?> status = client().get().uri("/api/spotify/status")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(Map.class)
+                .returnResult()
+                .getResponseBody();
+        long pausedUntil = ((Number) status.get("spotifyPausedUntil")).longValue();
+
+        assertTrue(pausedUntil > System.currentTimeMillis());
+        waitUntil(() -> Long.valueOf(pausedUntil).equals(savedSpotifyPause()));
+
+        // Nothing reaches Spotify during the pause, not even an artist search.
+        int artistSearchesBefore = FAKE.artistSearchRequests.get();
+
+        client().get().uri("/api/spotify/artists/search?query=Pause")
+                .exchange()
+                .expectStatus().isEqualTo(429);
+
+        assertEquals(artistSearchesBefore, FAKE.artistSearchRequests.get());
+
+        // Once the pause is over, requests go through again.
+        waitUntil(() -> System.currentTimeMillis() > pausedUntil);
+
+        client().get().uri("/api/spotify/artists/search?query=Pause")
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    @Test
+    void savedSpotifyMatchesSurviveARestartSoSongsAreNotSearchedAgain() {
+        String seed = "Saved " + uniqueCode();
+        String token = login(uniqueCode());
+        int searchesBefore = FAKE.trackSearchRequests.get();
+        long rowsBefore = spotifyMatchRows();
+
+        assertEquals(3, generate(token, seed, 3).tracks().size());
+
+        int searches = FAKE.trackSearchRequests.get() - searchesBefore;
+        assertTrue(searches > 0);
+
+        // Matches are saved in the background, one row per search, including searches still running
+        // when the playlist filled up.
+        waitUntil(() -> spotifyMatchRows() >= rowsBefore + searches);
+
+        spotifyTrackSearchService.forgetCachedMatches();
+        int searchesAfterRestart = FAKE.trackSearchRequests.get();
+
+        assertEquals(3, generate(token, seed, 3).tracks().size());
+        assertEquals(searchesAfterRestart, FAKE.trackSearchRequests.get());
+    }
+
+    private Long savedSpotifyPause() {
+        return databaseClient.sql("SELECT paused_until AS \"pausedUntil\" FROM spotify_pause WHERE id = 1")
+                .map(row -> row.get("pausedUntil", Long.class))
+                .one()
+                .block();
+    }
+
+    private long spotifyMatchRows() {
+        return databaseClient.sql("SELECT COUNT(*) AS \"total\" FROM spotify_track_matches")
+                .map(row -> row.get("total", Long.class))
+                .one()
+                .block();
+    }
+
     private static void waitUntil(BooleanSupplier condition) {
         long deadline = System.currentTimeMillis() + 5_000;
 
@@ -448,7 +539,7 @@ class ApiFlowIntegrationTest {
 
         int maxConcurrent = FAKE.maxConcurrentTrackSearches.get();
         assertTrue(maxConcurrent > 1, "lookups ran one at a time");
-        assertTrue(maxConcurrent <= 5, "more than 5 lookups ran at once: " + maxConcurrent);
+        assertTrue(maxConcurrent <= 3, "more than 3 lookups ran at once: " + maxConcurrent);
 
         for (int i = 1; i < tracks.size(); i++) {
             assertTrue(tracks.get(i - 1).score() >= tracks.get(i).score(), "tracks are out of ranking order");

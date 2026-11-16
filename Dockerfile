@@ -1,5 +1,5 @@
 # Base images are pinned to exact builds; Dependabot opens a pull request when newer ones come out.
-FROM eclipse-temurin:17-jdk@sha256:5465815640e10433422217335e15a523a3e57021a1f2ae0fc3849380d237979f AS build
+FROM eclipse-temurin:25-jdk@sha256:b8705e936964c228dfce359e63dbf08f6c69cb380ed1d576b1f6b1064f15567d AS build
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ COPY src src
 RUN ./mvnw clean package -DskipTests
 
 
-FROM eclipse-temurin:17-jre@sha256:0b6521287f850ec1c4b31c9074c5a1ae1d67c5922c3fefd21065c7c32e244d4a
+FROM eclipse-temurin:25-jre@sha256:a640968ae55027b322cedd5f8228b01a84baff0b9e9360e47601c6a111ba1699
 
 # Run as an unprivileged user so a compromised app cannot modify the system.
 RUN groupadd --system app && useradd --system --gid app --home-dir /app --no-create-home app

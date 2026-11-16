@@ -127,7 +127,7 @@ All settings are environment variables, or entries in `.env.local` for local dev
 | `SPRING_R2DBC_URL` | Database connection URL | local H2 file in `data/` |
 | `SPRING_R2DBC_USERNAME` | Database user | `sa` |
 | `SPRING_R2DBC_PASSWORD` | Database password | empty |
-| `RATE_LIMIT_TRUSTED_PROXY_HOPS` | Number of reverse proxies in front of the app; `0` ignores `X-Forwarded-For` | `1` on Render, otherwise `0` |
+| `RATE_LIMIT_TRUSTED_PROXY_HOPS` | Number of reverse proxies in front of the app; `0` ignores `X-Forwarded-For`. On Render, visitors are identified by Cloudflare's `CF-Connecting-IP` header first | `2` on Render, otherwise `0` |
 | `SPOTIFY_DAILY_REQUEST_LIMIT` | Spotify Web API requests allowed in any 24 hours, site-wide; `0` turns it off | `1000` |
 | `SITE_WIDE_GENERATIONS_PER_HOUR` | Playlists generated per hour, all visitors combined | `15` |
 | `SITE_WIDE_REPLACEMENTS_PER_HOUR` | Songs replaced per hour, all visitors combined | `40` |

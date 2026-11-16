@@ -62,6 +62,7 @@ public class ApiRateLimitFilter implements WebFilter {
 
     private final SpotifyAuthService spotifyAuthService;
     private final UsageCounterStore usageStore;
+    private final boolean onRender;
     private final int trustedProxyHops;
     private final int siteWideGenerationsPerHour;
     private final int siteWideReplacementsPerHour;
@@ -75,8 +76,10 @@ public class ApiRateLimitFilter implements WebFilter {
      * up to 8, and an artist search 1.
      *
      * @param configuredProxyHops RATE_LIMIT_TRUSTED_PROXY_HOPS, or null when it isn't set
-     * @param onRender Render sets RENDER=true on every service. Its proxy is the one hop in front of
-     *                 the app, so without this visitors would all share the proxy's address and limit.
+     * @param onRender Render sets RENDER=true on every service. Render runs behind Cloudflare, which
+     *                 puts the visitor's address in CF-Connecting-IP, replacing anything the visitor
+     *                 sent. X-Forwarded-For there reads "visitor, Cloudflare server", so its last
+     *                 entry is Cloudflare's and changes from request to request.
      */
     public ApiRateLimitFilter(
             SpotifyAuthService spotifyAuthService,
@@ -89,16 +92,19 @@ public class ApiRateLimitFilter implements WebFilter {
     ) {
         this.spotifyAuthService = spotifyAuthService;
         this.usageStore = usageStore;
-        this.trustedProxyHops = configuredProxyHops != null ? configuredProxyHops : (onRender ? 1 : 0);
+        this.onRender = onRender;
+        this.trustedProxyHops = configuredProxyHops != null ? configuredProxyHops : (onRender ? 2 : 0);
         this.siteWideGenerationsPerHour = siteWideGenerationsPerHour;
         this.siteWideReplacementsPerHour = siteWideReplacementsPerHour;
         this.siteWideArtistSearchesPerHour = siteWideArtistSearchesPerHour;
 
+        String fallback = trustedProxyHops > 0
+                ? "X-Forwarded-For, trusting " + trustedProxyHops + " proxy hop(s)"
+                : "connection address (RATE_LIMIT_TRUSTED_PROXY_HOPS not set)";
+
         log.info(
                 "Rate limits identify logged-out visitors by {}.",
-                trustedProxyHops > 0
-                        ? "X-Forwarded-For, trusting " + trustedProxyHops + " proxy hop(s)"
-                        : "connection address (RATE_LIMIT_TRUSTED_PROXY_HOPS not set)"
+                onRender ? "CF-Connecting-IP (Render runs behind Cloudflare), otherwise " + fallback : fallback
         );
     }
 
@@ -358,6 +364,14 @@ public class ApiRateLimitFilter implements WebFilter {
      * number of trusted proxies, counted from the right, are believed.
      */
     private String clientIp(ServerWebExchange exchange) {
+        if (onRender) {
+            String cloudflareVisitor = exchange.getRequest().getHeaders().getFirst("CF-Connecting-IP");
+
+            if (cloudflareVisitor != null && !cloudflareVisitor.isBlank()) {
+                return visitorAddress(cloudflareVisitor);
+            }
+        }
+
         if (trustedProxyHops > 0) {
             List<String> forwardedFor = exchange.getRequest()
                     .getHeaders()

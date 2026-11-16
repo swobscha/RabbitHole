@@ -86,19 +86,55 @@ class ApiRateLimitFilterTest {
     }
 
     @Test
-    void onRenderVisitorsAreToldApartByTheAddressRendersProxyAdds() {
-        // RATE_LIMIT_TRUSTED_PROXY_HOPS isn't set, but RENDER=true is.
+    void onRenderVisitorsAreToldApartByTheAddressCloudflareReports() {
+        // RATE_LIMIT_TRUSTED_PROXY_HOPS isn't set, but RENDER=true is. Each request comes through a
+        // different Cloudflare server, which is what broke counting by the last X-Forwarded-For entry.
         ApiRateLimitFilter filter = filter(noSavedCounts(), null, true, 1000, 1000, 1000);
 
-        // Every request arrives from Render's proxy; the proxy puts the visitor's address last.
         for (int i = 0; i < 5; i++) {
-            assertNull(generateViaProxy(filter, "198.51.100.7").getResponse().getStatusCode());
+            assertNull(generateViaCloudflare(filter, "198.51.100.7", "172.68.0." + i, true).getResponse().getStatusCode());
         }
 
-        assertEquals(HttpStatus.TOO_MANY_REQUESTS, generateViaProxy(filter, "198.51.100.7").getResponse().getStatusCode());
+        assertEquals(
+                HttpStatus.TOO_MANY_REQUESTS,
+                generateViaCloudflare(filter, "198.51.100.7", "172.68.0.99", true).getResponse().getStatusCode()
+        );
 
-        // A different visitor behind the same proxy has their own limit.
-        assertNull(generateViaProxy(filter, "203.0.113.9").getResponse().getStatusCode());
+        // A different visitor has their own limit.
+        assertNull(generateViaCloudflare(filter, "203.0.113.9", "172.68.0.1", true).getResponse().getStatusCode());
+    }
+
+    @Test
+    void onRenderWithoutCloudflaresHeaderTheVisitorIsSecondFromTheRightInXForwardedFor() {
+        ApiRateLimitFilter filter = filter(noSavedCounts(), null, true, 1000, 1000, 1000);
+
+        for (int i = 0; i < 5; i++) {
+            assertNull(generateViaCloudflare(filter, "198.51.100.8", "172.68.1." + i, false).getResponse().getStatusCode());
+        }
+
+        assertEquals(
+                HttpStatus.TOO_MANY_REQUESTS,
+                generateViaCloudflare(filter, "198.51.100.8", "172.68.1.99", false).getResponse().getStatusCode()
+        );
+    }
+
+    /** What a request looks like on Render: through Cloudflare's edge, then Render's proxy. */
+    private MockServerWebExchange generateViaCloudflare(
+            ApiRateLimitFilter filter,
+            String visitorIp,
+            String cloudflareServerIp,
+            boolean withCloudflareHeader
+    ) {
+        MockServerHttpRequest.BaseBuilder<?> request = MockServerHttpRequest.post("/api/playlists/generate")
+                .remoteAddress(new InetSocketAddress("10.10.0.5", 5000))
+                // Anything a visitor sends themselves comes first and is ignored.
+                .header("X-Forwarded-For", "1.1.1.1, " + visitorIp + ", " + cloudflareServerIp);
+
+        if (withCloudflareHeader) {
+            request.header("CF-Connecting-IP", visitorIp);
+        }
+
+        return run(filter, request.build());
     }
 
     @Test
@@ -200,14 +236,6 @@ class ApiRateLimitFilterTest {
     private MockServerWebExchange searchFrom(ApiRateLimitFilter filter, String ip) {
         return run(filter, MockServerHttpRequest.get("/api/spotify/artists/search?query=x")
                 .remoteAddress(new InetSocketAddress(ip, 5000))
-                .build());
-    }
-
-    private MockServerWebExchange generateViaProxy(ApiRateLimitFilter filter, String visitorIp) {
-        return run(filter, MockServerHttpRequest.post("/api/playlists/generate")
-                .remoteAddress(new InetSocketAddress("10.10.0.5", 5000))
-                // Anything a visitor sends themselves comes first and is ignored.
-                .header("X-Forwarded-For", "1.1.1.1, " + visitorIp)
                 .build());
     }
 

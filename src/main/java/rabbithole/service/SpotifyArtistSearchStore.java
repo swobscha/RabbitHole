@@ -93,6 +93,21 @@ public class SpotifyArtistSearchStore {
                 );
     }
 
+    /** Deletes results that are too old to be used. Returns how many rows went. */
+    public Mono<Long> deleteExpired() {
+        long now = System.currentTimeMillis();
+
+        return databaseClient.sql("""
+                        DELETE FROM spotify_artist_searches
+                        WHERE checked_at < :resultsCutoff
+                           OR (results = '[]' AND checked_at < :emptyCutoff)
+                        """)
+                .bind("resultsCutoff", now - RESULTS_LIFETIME.toMillis())
+                .bind("emptyCutoff", now - EMPTY_RESULTS_LIFETIME.toMillis())
+                .fetch()
+                .rowsUpdated();
+    }
+
     private static String hash(String value) {
         try {
             return HexFormat.of().formatHex(

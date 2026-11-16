@@ -1,5 +1,7 @@
 package rabbithole.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,12 +42,28 @@ public class SpotifyRateLimitGuard {
     private static final long DAY_MS = Duration.ofDays(1).toMillis();
     private static final String USAGE_PREFIX = "spotify-hour:";
 
+    /** Reactor context key for who a request is for: "user:<id>" when connected, otherwise "ip:<address>". */
+    public static final String VISITOR_CONTEXT_KEY = "rabbithole.visitor";
+
+    // Connected accounts were approved by the app owner in Spotify's dashboard, so they're trusted and
+    // keep this share for themselves even if everyone else's part is used up.
+    private static final double RESERVED_FOR_CONNECTED_ACCOUNTS = 0.2;
+    // No single logged-out visitor can use more than this share of the day's allowance.
+    private static final double MAX_SHARE_PER_VISITOR = 0.15;
+
     private final DatabaseClient databaseClient;
     private final UsageCounterStore usageStore;
     private final int dailyRequestLimit;
 
     // Spotify requests made in each hour (keyed by the hour's start, epoch ms) over the last 24 hours.
     private final NavigableMap<Long, Integer> requestsPerHour = new TreeMap<>();
+
+    // The same, per logged-out visitor. Kept in memory only: a deploy resets it, but the shared total
+    // above is saved, so that can't be used to get around the daily allowance.
+    private final Cache<String, NavigableMap<Long, Integer>> requestsPerVisitorHour = Caffeine.newBuilder()
+            .maximumSize(50_000)
+            .expireAfterAccess(Duration.ofDays(1))
+            .build();
 
     private volatile long pausedUntilMs = 0;
 
@@ -96,20 +114,23 @@ public class SpotifyRateLimitGuard {
         return System.currentTimeMillis() < pausedUntilMs;
     }
 
-    /** When Spotify requests can be made again (epoch ms), for either reason, or 0 when they can now. */
-    public long blockedUntilMs() {
+    /**
+     * When this kind of visitor can make Spotify requests again (epoch ms), or 0 when they can now.
+     * Connected accounts have a reserved part of the allowance, so they can be blocked later than others.
+     */
+    public long blockedUntilMs(boolean connectedAccount) {
         long spotifyPause = isPaused() ? pausedUntilMs : 0;
 
-        return Math.max(spotifyPause, dailyLimitResetsAtMs());
+        return Math.max(spotifyPause, dailyLimitResetsAtMs(connectedAccount));
     }
 
     /** "spotify" when Spotify asked for the wait, "daily-limit" when RabbitHole's own allowance ran out. */
-    public String blockReason() {
+    public String blockReason(boolean connectedAccount) {
         if (isPaused()) {
             return "spotify";
         }
 
-        return dailyLimitResetsAtMs() > 0 ? "daily-limit" : "";
+        return dailyLimitResetsAtMs(connectedAccount) > 0 ? "daily-limit" : "";
     }
 
     public ResponseStatusException pausedError() {
@@ -119,28 +140,44 @@ public class SpotifyRateLimitGuard {
         );
     }
 
-    public ResponseStatusException dailyLimitError() {
+    public ResponseStatusException dailyLimitError(boolean connectedAccount) {
         return new ResponseStatusException(
                 HttpStatus.TOO_MANY_REQUESTS,
                 "RabbitHole has used today's Spotify allowance, which keeps it within Spotify's limits. "
-                        + "Try again in " + describeWait(dailyLimitResetsAtMs()) + "."
+                        + "Try again in " + describeWait(dailyLimitResetsAtMs(connectedAccount)) + "."
         );
     }
 
-    /**
-     * Counts one Spotify request against the daily allowance, or returns false when it's used up.
-     * Package-private for tests.
-     */
-    synchronized boolean tryUseDailyAllowance() {
-        long now = System.currentTimeMillis();
+    public ResponseStatusException visitorLimitError(String visitor) {
+        return new ResponseStatusException(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "You've used your share of RabbitHole's Spotify allowance for today. "
+                        + "Try again in " + describeWait(visitorLimitResetsAtMs(visitor)) + "."
+        );
+    }
 
-        if (dailyRequestLimit > 0 && usedInLastDay(now) >= dailyRequestLimit) {
-            return false;
+    /** Counts one Spotify request for this visitor (null when unknown), or says why it's refused. */
+    synchronized Allowance tryUseDailyAllowance(String visitor) {
+        long now = System.currentTimeMillis();
+        boolean connectedAccount = isConnectedAccount(visitor);
+
+        if (dailyRequestLimit > 0) {
+            if (usedInLastDay(now) >= limitFor(connectedAccount)) {
+                return Allowance.DAILY_LIMIT;
+            }
+
+            if (isAnonymousVisitor(visitor) && used(visitorHours(visitor), now) >= perVisitorLimit()) {
+                return Allowance.VISITOR_LIMIT;
+            }
         }
 
         long hour = now - now % HOUR_MS;
         boolean newHour = !requestsPerHour.containsKey(hour);
         int count = requestsPerHour.merge(hour, 1, Integer::sum);
+
+        if (isAnonymousVisitor(visitor)) {
+            visitorHours(visitor).merge(hour, 1, Integer::sum);
+        }
 
         usageStore.save(USAGE_PREFIX + hour, hour, count);
 
@@ -148,22 +185,68 @@ public class SpotifyRateLimitGuard {
             usageStore.deleteOlderThan(USAGE_PREFIX, now - DAY_MS - HOUR_MS);
         }
 
-        return true;
+        return Allowance.ALLOWED;
     }
 
-    /** When enough of the last day's requests age out to allow more (epoch ms), or 0 if there's room now. */
-    synchronized long dailyLimitResetsAtMs() {
-        long now = System.currentTimeMillis();
-        int remaining = usedInLastDay(now);
-
-        if (dailyRequestLimit <= 0 || remaining < dailyRequestLimit) {
+    /** When there's room again in this visitor type's part of the allowance (epoch ms), or 0 if there is now. */
+    synchronized long dailyLimitResetsAtMs(boolean connectedAccount) {
+        if (dailyRequestLimit <= 0) {
             return 0;
         }
 
-        for (Map.Entry<Long, Integer> hour : requestsPerHour.entrySet()) {
+        return resetsAt(requestsPerHour, limitFor(connectedAccount));
+    }
+
+    synchronized long visitorLimitResetsAtMs(String visitor) {
+        if (dailyRequestLimit <= 0 || !isAnonymousVisitor(visitor)) {
+            return 0;
+        }
+
+        return resetsAt(visitorHours(visitor), perVisitorLimit());
+    }
+
+    /** Everyone except connected accounts shares what isn't reserved for them. */
+    private int limitFor(boolean connectedAccount) {
+        return connectedAccount
+                ? dailyRequestLimit
+                : (int) Math.floor(dailyRequestLimit * (1 - RESERVED_FOR_CONNECTED_ACCOUNTS));
+    }
+
+    private int perVisitorLimit() {
+        return Math.max(1, (int) Math.floor(dailyRequestLimit * MAX_SHARE_PER_VISITOR));
+    }
+
+    // Callers hold the lock.
+    private NavigableMap<Long, Integer> visitorHours(String visitor) {
+        return requestsPerVisitorHour.get(visitor, ignored -> new TreeMap<>());
+    }
+
+    private static boolean isConnectedAccount(String visitor) {
+        return visitor != null && visitor.startsWith("user:");
+    }
+
+    /**
+     * A logged-out visitor, who is also held to a personal share. Requests with no known visitor (such
+     * as finishing a login) aren't, but like logged-out visitors they only use the shared part, so
+     * repeated logins with unapproved accounts can't eat into what's reserved for connected accounts.
+     */
+    private static boolean isAnonymousVisitor(String visitor) {
+        return visitor != null && !isConnectedAccount(visitor);
+    }
+
+    /** When enough of these hours' requests age out to bring them under the limit, or 0 if they're under. */
+    private static long resetsAt(NavigableMap<Long, Integer> hours, int limit) {
+        long now = System.currentTimeMillis();
+        int remaining = used(hours, now);
+
+        if (remaining < limit) {
+            return 0;
+        }
+
+        for (Map.Entry<Long, Integer> hour : hours.entrySet()) {
             remaining -= hour.getValue();
 
-            if (remaining < dailyRequestLimit) {
+            if (remaining < limit) {
                 return hour.getKey() + DAY_MS;
             }
         }
@@ -173,24 +256,38 @@ public class SpotifyRateLimitGuard {
 
     // Callers hold the lock.
     private int usedInLastDay(long now) {
-        requestsPerHour.headMap(now - DAY_MS, true).clear();
+        return used(requestsPerHour, now);
+    }
 
-        return requestsPerHour.values().stream().mapToInt(Integer::intValue).sum();
+    private static int used(NavigableMap<Long, Integer> hours, long now) {
+        hours.headMap(now - DAY_MS, true).clear();
+
+        return hours.values().stream().mapToInt(Integer::intValue).sum();
     }
 
     /**
-     * Refuses to send requests during a pause or once the daily allowance is used, and starts a pause
-     * when Spotify answers 429.
+     * Refuses to send requests during a pause or once the allowance is used, and starts a pause when
+     * Spotify answers 429. The rate-limit filter puts the visitor in the request's context.
      */
     public ExchangeFilterFunction filter() {
-        return (request, next) -> {
+        return (request, next) -> Mono.deferContextual(context -> {
             if (isPaused()) {
                 return Mono.error(pausedError());
             }
 
-            if (!tryUseDailyAllowance()) {
-                log.warn("Daily Spotify allowance of {} requests used; refusing {} {}.", dailyRequestLimit, request.method(), request.url().getPath());
-                return Mono.error(dailyLimitError());
+            String visitor = context.getOrDefault(VISITOR_CONTEXT_KEY, null);
+
+            switch (tryUseDailyAllowance(visitor)) {
+                case DAILY_LIMIT -> {
+                    log.warn("Daily Spotify allowance used; refusing {} {} for {}.", request.method(), request.url().getPath(), visitor);
+                    return Mono.error(dailyLimitError(isConnectedAccount(visitor)));
+                }
+                case VISITOR_LIMIT -> {
+                    log.warn("Visitor used their share of the daily Spotify allowance; refusing {} {} for {}.", request.method(), request.url().getPath(), visitor);
+                    return Mono.error(visitorLimitError(visitor));
+                }
+                case ALLOWED -> {
+                }
             }
 
             return next.exchange(request).doOnNext(response -> {
@@ -198,7 +295,13 @@ public class SpotifyRateLimitGuard {
                     pauseFor(retryAfterSeconds(response.headers().asHttpHeaders().getFirst(HttpHeaders.RETRY_AFTER)));
                 }
             });
-        };
+        });
+    }
+
+    enum Allowance {
+        ALLOWED,
+        DAILY_LIMIT,
+        VISITOR_LIMIT
     }
 
     void pauseFor(long seconds) {

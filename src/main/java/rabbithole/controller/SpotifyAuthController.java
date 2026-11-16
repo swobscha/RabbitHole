@@ -124,8 +124,8 @@ public class SpotifyAuthController {
                         "redirectUri", spotifyAuthService.configuredRedirectUri(),
                         // When Spotify requests can be made again (epoch ms), or 0, so the page can warn visitors
                         // up front, and whether Spotify asked for the wait or RabbitHole's daily allowance ran out.
-                        "spotifyPausedUntil", spotifyRateLimitGuard.blockedUntilMs(),
-                        "spotifyPauseReason", spotifyRateLimitGuard.blockReason()
+                        "spotifyPausedUntil", spotifyRateLimitGuard.blockedUntilMs(connected),
+                        "spotifyPauseReason", spotifyRateLimitGuard.blockReason(connected)
                 ));
     }
 

@@ -113,7 +113,31 @@ public class SpotifyTrackSearchService {
             String requiredSpotifyArtistId,
             String cacheKey
     ) {
-        Mono<TrackMatch> search = searchSpotifyOnce(accessToken, track.artistName(), track.name(), requiredSpotifyArtistId)
+        // The search is started below outside the request, so it's handed the request's context: the
+        // daily allowance needs to know which visitor the search is for.
+        return Mono.deferContextual(context -> {
+            Mono<TrackMatch> search = startSearch(accessToken, track, requiredSpotifyArtistId, cacheKey);
+
+            // Searches still running when a playlist fills up are no longer waited for, but Spotify has
+            // already counted them, so they're finished and saved anyway instead of being thrown away.
+            search.contextWrite(context).subscribe(
+                    ignored -> {
+                    },
+                    ignored -> {
+                    }
+            );
+
+            return search;
+        });
+    }
+
+    private Mono<TrackMatch> startSearch(
+            String accessToken,
+            TrackCandidate track,
+            String requiredSpotifyArtistId,
+            String cacheKey
+    ) {
+        return searchSpotifyOnce(accessToken, track.artistName(), track.name(), requiredSpotifyArtistId)
                 .map(result -> {
                     if (result.hasUri()) {
                         rememberInMemory(cacheKey, result.uri());
@@ -131,17 +155,6 @@ public class SpotifyTrackSearchService {
                     return TrackMatch.searched(null);
                 })
                 .cache();
-
-        // Searches still running when a playlist fills up are no longer waited for, but Spotify has
-        // already counted them, so they're finished and saved anyway instead of being thrown away.
-        search.subscribe(
-                ignored -> {
-                },
-                ignored -> {
-                }
-        );
-
-        return search;
     }
 
     private void rememberInMemory(String cacheKey, String spotifyUri) {

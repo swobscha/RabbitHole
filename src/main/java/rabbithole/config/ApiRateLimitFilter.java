@@ -16,9 +16,14 @@ import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 import rabbithole.service.SpotifyAuthService;
+import rabbithole.service.SpotifyRateLimitGuard;
 import rabbithole.service.UsageCounterStore;
 
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -37,6 +42,17 @@ public class ApiRateLimitFilter implements WebFilter {
     private static final long CLEANUP_INTERVAL_MS = 60_000L;
 
     private static final String SITE_WIDE_PREFIX = "site:";
+
+    // All API requests from one address, checked before anything else. Generous for a real visitor.
+    private static final int MAX_API_REQUESTS_PER_MINUTE = 120;
+    private static final int SITE_WIDE_PREFETCHES_PER_HOUR = 60;
+
+    // Only accounts approved in Spotify's dashboard can log in, so real logins are rare.
+    @Value("${SITE_WIDE_LOGINS_PER_HOUR:30}")
+    private int siteWideLoginsPerHour = 30;
+
+    @Value("${FRONTEND_URL:http://localhost:5173}")
+    private String frontendUrl;
 
     private final Map<String, WindowCounter> counters = new ConcurrentHashMap<>();
 
@@ -102,24 +118,65 @@ public class ApiRateLimitFilter implements WebFilter {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
+        if (!exchange.getRequest().getPath().value().startsWith("/api/")) {
+            return chain.filter(exchange);
+        }
+
+        cleanupOldCountersIfNeeded();
+
+        String address = "ip:" + clientIp(exchange);
+
+        // Every API request from an address counts here first, before anything can reach the database,
+        // so requests with made-up login tokens can't be used to keep it busy.
+        WindowCounter anyRequest = counters.computeIfAbsent(
+                address + "|any-api",
+                ignored -> new WindowCounter(System.currentTimeMillis())
+        );
+
+        if (!anyRequest.tryConsume(MAX_API_REQUESTS_PER_MINUTE, WINDOW_MS)) {
+            long retryAfterSeconds = anyRequest.retryAfterSeconds(WINDOW_MS);
+
+            log.warn("Rate limit reached | route=any-api | client={} | retryAfterSeconds={}", address, retryAfterSeconds);
+
+            return writeRateLimitResponse(
+                    exchange,
+                    "any-api",
+                    retryAfterSeconds,
+                    "Too many requests. Wait about " + retryAfterSeconds + " seconds and try again."
+            );
+        }
+
         RouteLimit routeLimit = routeLimitFor(exchange);
 
         if (routeLimit == null) {
             return chain.filter(exchange);
         }
 
-        cleanupOldCountersIfNeeded();
-
         String authorization = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
 
         return spotifyAuthService.findSession(authorization)
                 .map(session -> "user:" + session.spotifyUserId())
                 .onErrorResume(error -> Mono.empty())
-                .defaultIfEmpty("ip:" + clientIp(exchange))
+                .defaultIfEmpty(address)
                 .flatMap(client -> applyLimit(exchange, chain, routeLimit, client));
     }
 
     private Mono<Void> applyLimit(
+            ServerWebExchange exchange,
+            WebFilterChain chain,
+            RouteLimit routeLimit,
+            String client
+    ) {
+        Mono<Void> request = limitedRequest(exchange, chain, routeLimit, client);
+
+        // Tells the Spotify guard whose request this is, so each visitor's share of the daily
+        // allowance can be counted. Finishing a login isn't counted against the visitor.
+        return routeLimit.countsSpotifyCallsForVisitor()
+                ? request.contextWrite(context -> context.put(SpotifyRateLimitGuard.VISITOR_CONTEXT_KEY, client))
+                : request;
+    }
+
+    private Mono<Void> limitedRequest(
             ServerWebExchange exchange,
             WebFilterChain chain,
             RouteLimit routeLimit,
@@ -147,7 +204,7 @@ public class ApiRateLimitFilter implements WebFilter {
 
             return writeRateLimitResponse(
                     exchange,
-                    routeLimit,
+                    routeLimit.name(),
                     retryAfterSeconds,
                     "Too many requests. Wait about " + retryAfterSeconds + " seconds and try again."
             );
@@ -177,7 +234,7 @@ public class ApiRateLimitFilter implements WebFilter {
 
                 return writeRateLimitResponse(
                         exchange,
-                        routeLimit,
+                        routeLimit.name(),
                         retryAfterSeconds,
                         "RabbitHole has reached its hourly limit, which keeps it within Spotify's limits. "
                                 + "Try again in about " + minutes + (minutes == 1 ? " minute." : " minutes.")
@@ -200,9 +257,10 @@ public class ApiRateLimitFilter implements WebFilter {
             return new RouteLimit("generate-playlist", 5, siteWideGenerationsPerHour);
         }
 
-        // Each prefetch makes many Last.fm calls, so a visitor gets only a few a minute.
+        // Each prefetch makes many Last.fm calls, so a visitor gets only a few a minute, and the site
+        // only so many an hour; they're just a head start, so running out costs nothing but speed.
         if (method == HttpMethod.POST && path.equals("/api/playlists/prefetch")) {
-            return new RouteLimit("prefetch", 6, 0);
+            return new RouteLimit("prefetch", 6, SITE_WIDE_PREFETCHES_PER_HOUR);
         }
 
         if (method == HttpMethod.POST && path.equals("/api/playlists/replace-track")) {
@@ -221,6 +279,24 @@ public class ApiRateLimitFilter implements WebFilter {
             return new RouteLimit("spotify-login", 30, 0);
         }
 
+        // Finishing a login asks Spotify who the account is, which uses the daily allowance even when
+        // the account turns out not to be approved, so logins are capped for the whole site too.
+        if (method == HttpMethod.GET && path.equals("/api/spotify/callback")) {
+            return new RouteLimit("spotify-callback", 10, siteWideLoginsPerHour, false);
+        }
+
+        if (method == HttpMethod.GET && path.equals("/api/spotify/status")) {
+            return new RouteLimit("spotify-status", 60, 0);
+        }
+
+        if (method == HttpMethod.POST && path.equals("/api/spotify/logout")) {
+            return new RouteLimit("spotify-logout", 10, 0);
+        }
+
+        if (method == HttpMethod.GET && path.equals("/api/playlists/history")) {
+            return new RouteLimit("history", 30, 0);
+        }
+
         if (method == HttpMethod.DELETE && path.equals("/api/playlists/history")) {
             return new RouteLimit("clear-history", 5, 0);
         }
@@ -230,11 +306,23 @@ public class ApiRateLimitFilter implements WebFilter {
 
     private Mono<Void> writeRateLimitResponse(
             ServerWebExchange exchange,
-            RouteLimit routeLimit,
+            String limitName,
             long retryAfterSeconds,
             String message
     ) {
         String path = exchange.getRequest().getPath().value();
+
+        // Logins are page visits rather than calls from the page, so send the visitor back to the
+        // page with a message instead of showing them raw JSON.
+        if (path.equals("/api/spotify/login") || path.equals("/api/spotify/callback")) {
+            String cleanFrontendUrl = frontendUrl == null || frontendUrl.isBlank()
+                    ? "http://localhost:5173"
+                    : frontendUrl.trim().replaceAll("/+$", "");
+
+            exchange.getResponse().setStatusCode(HttpStatus.SEE_OTHER);
+            exchange.getResponse().getHeaders().setLocation(URI.create(cleanFrontendUrl + "?spotify=error&reason=busy"));
+            return exchange.getResponse().setComplete();
+        }
 
         String body = "{"
                 + "\"status\":429,"
@@ -249,7 +337,7 @@ public class ApiRateLimitFilter implements WebFilter {
                 + OffsetDateTime.now(ZoneOffset.UTC)
                 + "\","
                 + "\"limit\":\""
-                + escapeJson(routeLimit.name())
+                + escapeJson(limitName)
                 + "\""
                 + "}";
 
@@ -276,7 +364,7 @@ public class ApiRateLimitFilter implements WebFilter {
                     .getValuesAsList("X-Forwarded-For");
 
             if (forwardedFor.size() >= trustedProxyHops) {
-                return forwardedFor.get(forwardedFor.size() - trustedProxyHops).trim();
+                return visitorAddress(forwardedFor.get(forwardedFor.size() - trustedProxyHops));
             }
         }
 
@@ -286,7 +374,42 @@ public class ApiRateLimitFilter implements WebFilter {
             return "unknown";
         }
 
-        return remoteAddress.getAddress().getHostAddress();
+        return visitorAddress(remoteAddress.getAddress().getHostAddress());
+    }
+
+    /**
+     * A home or phone connection on IPv6 usually gets a whole /64 block of addresses, so anyone could
+     * switch address with every request. The block is what identifies the visitor. IPv4 is unchanged.
+     */
+    static String visitorAddress(String address) {
+        String candidate = address.trim();
+
+        if (!candidate.contains(":")) {
+            return candidate;
+        }
+
+        String literal = candidate.replaceAll("^\\[|]$", "").replaceAll("%.*$", "");
+
+        try {
+            // The brackets make Java read it strictly as an IPv6 literal, never as a host name to look up.
+            InetAddress parsed = InetAddress.getByName("[" + literal + "]");
+
+            if (!(parsed instanceof Inet6Address)) {
+                // An IPv4 address written in IPv6 form.
+                return parsed.getHostAddress();
+            }
+
+            byte[] bytes = parsed.getAddress();
+            StringBuilder block = new StringBuilder();
+
+            for (int i = 0; i < 8; i += 2) {
+                block.append(Integer.toHexString(((bytes[i] & 0xff) << 8) | (bytes[i + 1] & 0xff))).append(':');
+            }
+
+            return block.append(":/64").toString();
+        } catch (UnknownHostException error) {
+            return candidate;
+        }
     }
 
     private void cleanupOldCountersIfNeeded() {
@@ -313,12 +436,20 @@ public class ApiRateLimitFilter implements WebFilter {
                 .replace("\"", "\\\"");
     }
 
-    /** maxRequests is per visitor per minute; siteWidePerHour is shared by everyone, or 0 for none. */
+    /**
+     * maxRequests is per visitor per minute; siteWidePerHour is shared by everyone, or 0 for none.
+     * countsSpotifyCallsForVisitor says whether Spotify calls made for the request count toward the
+     * visitor's share of the daily allowance.
+     */
     private record RouteLimit(
             String name,
             int maxRequests,
-            int siteWidePerHour
+            int siteWidePerHour,
+            boolean countsSpotifyCallsForVisitor
     ) {
+        RouteLimit(String name, int maxRequests, int siteWidePerHour) {
+            this(name, maxRequests, siteWidePerHour, true);
+        }
     }
 
     private static class WindowCounter {

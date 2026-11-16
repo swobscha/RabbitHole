@@ -132,6 +132,7 @@ All settings are environment variables, or entries in `.env.local` for local dev
 | `SITE_WIDE_GENERATIONS_PER_HOUR` | Playlists generated per hour, all visitors combined | `15` |
 | `SITE_WIDE_REPLACEMENTS_PER_HOUR` | Songs replaced per hour, all visitors combined | `40` |
 | `SITE_WIDE_ARTIST_SEARCHES_PER_HOUR` | Artist searches per hour, all visitors combined | `60` |
+| `SITE_WIDE_LOGINS_PER_HOUR` | Completed Spotify logins per hour, all visitors combined | `30` |
 | `DEBUG_RANKINGS_ENABLED` | Writes ranking CSV files to `debug-rankings/` | `false` |
 | `SENTRY_DSN` | Turns on error alerts through [Sentry](https://sentry.io) | empty (off) |
 | `LOGGING_LEVEL_RABBITHOLE` | Log detail; `DEBUG` shows every Spotify match decision | `INFO` |

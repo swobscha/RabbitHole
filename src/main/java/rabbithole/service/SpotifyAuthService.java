@@ -50,6 +50,13 @@ public class SpotifyAuthService {
             .expireAfterAccess(Duration.ofHours(6))
             .build();
 
+    // Tokens the database didn't know, so sending the same made-up token again doesn't query it again.
+    // Real sessions are put in activeSessions as soon as they're created, so they're never here.
+    private final Cache<String, Boolean> unknownTokens = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(Duration.ofMinutes(1))
+            .build();
+
     @Value("${SPOTIFY_CLIENT_ID:}")
     private String clientId;
 
@@ -128,8 +135,13 @@ public class SpotifyAuthService {
             return Mono.just(cached);
         }
 
+        if (unknownTokens.getIfPresent(lookupId) != null) {
+            return Mono.empty();
+        }
+
         return sessionStore.load(token)
-                .doOnNext(session -> activeSessions.put(lookupId, session));
+                .doOnNext(session -> activeSessions.put(lookupId, session))
+                .switchIfEmpty(Mono.fromRunnable(() -> unknownTokens.put(lookupId, Boolean.TRUE)));
     }
 
     public Mono<SpotifySession> requireSession(String authorizationHeader) {

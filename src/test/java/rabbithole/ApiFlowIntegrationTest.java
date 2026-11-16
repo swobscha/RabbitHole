@@ -18,6 +18,7 @@ import rabbithole.model.PlaylistGenerationResult;
 import rabbithole.model.PlaylistReplaceTrackResult;
 import rabbithole.model.SpotifySession;
 import rabbithole.model.WeightedTrack;
+import rabbithole.service.ExpiredDataCleanup;
 import rabbithole.service.SpotifyArtistSearchService;
 import rabbithole.service.SpotifySessionStore;
 import rabbithole.service.SpotifyTrackSearchService;
@@ -52,7 +53,10 @@ import static org.junit.jupiter.api.Assertions.fail;
         "FRONTEND_URL=http://frontend.test",
         "CORS_ALLOWED_ORIGINS=http://frontend.test",
         "lastfm.api-key=test-key",
-        "RATE_LIMIT_TRUSTED_PROXY_HOPS=0",
+        // Each test request says it's from a different address (see client()), so the per-visitor
+        // limits, which have their own tests, don't trip over the many requests made here.
+        "RATE_LIMIT_TRUSTED_PROXY_HOPS=1",
+        "SITE_WIDE_LOGINS_PER_HOUR=1000",
         "SITE_WIDE_GENERATIONS_PER_HOUR=1000",
         "SITE_WIDE_REPLACEMENTS_PER_HOUR=1000",
         "SITE_WIDE_ARTIST_SEARCHES_PER_HOUR=1000",
@@ -85,6 +89,9 @@ class ApiFlowIntegrationTest {
     @Autowired
     private UsageCounterStore usageCounterStore;
 
+    @Autowired
+    private ExpiredDataCleanup expiredDataCleanup;
+
     @DynamicPropertySource
     static void pointAtFakeApis(DynamicPropertyRegistry registry) {
         registry.add("SPOTIFY_ACCOUNTS_URL", () -> FAKE.url("/accounts"));
@@ -104,7 +111,13 @@ class ApiFlowIntegrationTest {
         return WebTestClient.bindToServer()
                 .baseUrl("http://127.0.0.1:" + port)
                 .responseTimeout(Duration.ofSeconds(60))
+                .defaultHeader("X-Forwarded-For", randomVisitorAddress())
                 .build();
+    }
+
+    private static String randomVisitorAddress() {
+        java.util.concurrent.ThreadLocalRandom random = java.util.concurrent.ThreadLocalRandom.current();
+        return "10." + random.nextInt(256) + "." + random.nextInt(256) + "." + random.nextInt(1, 255);
     }
 
     private static String uniqueCode() {
@@ -404,6 +417,71 @@ class ApiFlowIntegrationTest {
         // Spotify requests are counted per hour for the daily allowance.
         searchArtist("Counted " + uniqueCode());
         waitUntil(() -> !usageCounterStore.load("spotify-hour:").isEmpty());
+    }
+
+    @Test
+    void expiredSavedDataIsDeletedAndCurrentDataKept() {
+        long now = System.currentTimeMillis();
+        long eightDaysAgo = now - Duration.ofDays(8).toMillis();
+        long twoDaysAgo = now - Duration.ofDays(2).toMillis();
+        String run = uniqueCode().substring(0, 20);
+
+        insertArtistSearch("old-" + run, "[{\"name\":\"x\"}]", eightDaysAgo);
+        insertArtistSearch("empty-" + run, "[]", twoDaysAgo);
+        insertArtistSearch("fresh-" + run, "[{\"name\":\"x\"}]", twoDaysAgo);
+        insertTrackMatch("miss-" + run, null, eightDaysAgo);
+        insertTrackMatch("match-" + run, "spotify:track:kept", eightDaysAgo);
+
+        expiredDataCleanup.runOnce().block();
+
+        assertEquals(List.of("fresh-" + run), idsLike("spotify_artist_searches", run));
+        assertEquals(List.of("match-" + run), idsLike("spotify_track_matches", run));
+    }
+
+    @Test
+    void theArtistPopularitySettingIsIgnoredSoItCantTieUpLastFm() {
+        String token = login(uniqueCode());
+        int artistInfoBefore = FAKE.lastFmCallCount("artist.getinfo");
+
+        Map<String, Object> request = generationRequest("Crafted " + uniqueCode(), 3);
+        // The page always sends 0; 1 would look up every similar artist's listener count.
+        request.put("nicheArtistScale", 1);
+
+        client().post().uri("/api/playlists/generate")
+                .header("Authorization", "Bearer " + token)
+                .bodyValue(request)
+                .exchange()
+                .expectStatus().isOk();
+
+        assertEquals(artistInfoBefore, FAKE.lastFmCallCount("artist.getinfo"));
+    }
+
+    private void insertArtistSearch(String id, String results, long checkedAt) {
+        databaseClient.sql("INSERT INTO spotify_artist_searches (id, results, checked_at) VALUES (:id, :results, :checkedAt)")
+                .bind("id", id)
+                .bind("results", results)
+                .bind("checkedAt", checkedAt)
+                .fetch()
+                .rowsUpdated()
+                .block();
+    }
+
+    private void insertTrackMatch(String id, String uri, long checkedAt) {
+        DatabaseClient.GenericExecuteSpec insert = databaseClient
+                .sql("INSERT INTO spotify_track_matches (id, spotify_uri, checked_at) VALUES (:id, :uri, :checkedAt)")
+                .bind("id", id)
+                .bind("checkedAt", checkedAt);
+
+        (uri == null ? insert.bindNull("uri", String.class) : insert.bind("uri", uri)).fetch().rowsUpdated().block();
+    }
+
+    private List<String> idsLike(String table, String run) {
+        return databaseClient.sql("SELECT id FROM " + table + " WHERE id LIKE :pattern ORDER BY id")
+                .bind("pattern", "%" + run)
+                .map(row -> row.get("id", String.class))
+                .all()
+                .collectList()
+                .block();
     }
 
     private UsageCounterStore.SavedCount savedCount(String name) {

@@ -74,6 +74,7 @@ const LOGIN_ERROR_MESSAGES = {
     "not-allowed":
         "This Spotify account is not allowed to use RabbitHole yet. Only approved accounts can connect for now.",
     paused: "RabbitHole has reached Spotify's limits for now. Try connecting again later.",
+    busy: "Too many Spotify logins right now. Try again in a few minutes.",
     failed: "Spotify connection failed. Please try again.",
     "not-started":
         "That Spotify login wasn't started in this browser, so it was ignored. Connect Spotify again if you meant to.",

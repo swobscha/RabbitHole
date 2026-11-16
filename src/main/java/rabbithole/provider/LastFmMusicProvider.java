@@ -60,6 +60,8 @@ public class LastFmMusicProvider implements MusicApiProvider {
     // allowed as long as the 5-minute average stays at or under 5 per second.
     private static final long MIN_REQUEST_SPACING_MS = 200;
     private static final long BURST_WINDOW_MS = 300_000;
+    // About 10 calls already waiting for a slot.
+    private static final long PREFETCH_SKIP_BACKLOG_MS = 2_000;
 
     private static final Duration CACHE_LIFETIME = Duration.ofHours(24);
 
@@ -137,6 +139,13 @@ public class LastFmMusicProvider implements MusicApiProvider {
      */
     @Override
     public Mono<Void> prefetch(PlaylistGenerationRequest request) {
+        // A prefetch is only a head start and adds about 100 calls to the shared Last.fm pace. When
+        // playlists are already waiting their turn, it would only slow them down, so it's skipped.
+        if (nextRequestSlotMs.get() - System.currentTimeMillis() > PREFETCH_SKIP_BACKLOG_MS) {
+            log.debug("Prefetch for {} skipped; Last.fm calls are backed up.", request.seedArtist());
+            return Mono.empty();
+        }
+
         return findCandidateTracks(request)
                 .then()
                 .onErrorResume(error -> {

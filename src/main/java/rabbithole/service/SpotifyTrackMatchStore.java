@@ -74,6 +74,14 @@ public class SpotifyTrackMatchStore {
                 );
     }
 
+    /** Deletes misses too old to be used. Matches are kept. Returns how many rows went. */
+    public Mono<Long> deleteExpiredMisses() {
+        return databaseClient.sql("DELETE FROM spotify_track_matches WHERE spotify_uri IS NULL AND checked_at < :cutoff")
+                .bind("cutoff", System.currentTimeMillis() - MISS_LIFETIME.toMillis())
+                .fetch()
+                .rowsUpdated();
+    }
+
     private static DatabaseClient.GenericExecuteSpec withUri(DatabaseClient.GenericExecuteSpec spec, String spotifyUri) {
         return spotifyUri == null ? spec.bindNull("uri", String.class) : spec.bind("uri", spotifyUri);
     }

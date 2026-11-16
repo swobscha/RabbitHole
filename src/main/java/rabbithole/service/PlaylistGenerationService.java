@@ -96,10 +96,11 @@ public class PlaylistGenerationService {
 
     public Mono<PlaylistGenerationResult> generatePlaylist(
             Optional<SpotifySession> session,
-            PlaylistGenerationRequest request
+            PlaylistGenerationRequest requested
     ) {
-        validateGenerationRequest(request);
+        validateGenerationRequest(requested);
 
+        PlaylistGenerationRequest request = withoutArtistPopularity(requested);
         int playlistSize = request.playlistSize();
         int lookupAttempts = lookupAttemptsFor(playlistSize);
 
@@ -212,7 +213,8 @@ public class PlaylistGenerationService {
                 original.randomness(),
                 UUID.randomUUID().toString(),
                 original.avoidUsedTracks(),
-                original.nicheArtistScale(),
+                // See withoutArtistPopularity.
+                0.0,
                 original.nicheSongScale(),
                 original.safeSimilarityScale(),
                 original.safeDiscoveryLimit()
@@ -862,6 +864,30 @@ public class PlaylistGenerationService {
 
     private String normalizeArtistName(String artistName) {
         return TrackText.simplify(artistName);
+    }
+
+    /**
+     * Ranking artists by their own popularity needs a Last.fm lookup for each of up to 600 artists.
+     * The page never uses it (it always sends 0), so a request asking for it could only be someone
+     * trying to tie up the Last.fm calls everyone shares. It's switched off whatever is sent.
+     */
+    private PlaylistGenerationRequest withoutArtistPopularity(PlaylistGenerationRequest request) {
+        return new PlaylistGenerationRequest(
+                request.seedArtist(),
+                request.seedSpotifyArtistId(),
+                request.playlistName(),
+                request.playlistSize(),
+                request.restrictedArtists(),
+                request.preferredArtists(),
+                request.preferredGenres(),
+                request.randomness(),
+                request.generationSeed(),
+                request.avoidUsedTracks(),
+                0.0,
+                request.nicheSongScale(),
+                request.safeSimilarityScale(),
+                request.discoveryLimit()
+        );
     }
 
     private PlaylistGenerationRequest withDiscoveryLimit(

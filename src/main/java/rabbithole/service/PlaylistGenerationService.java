@@ -155,6 +155,8 @@ public class PlaylistGenerationService {
             );
         }
 
+        PlainText.require(seedArtist, "Seed artist");
+
         String artist = seedArtist.trim();
 
         if (runningPrefetches.incrementAndGet() > MAX_RUNNING_PREFETCHES) {
@@ -632,6 +634,8 @@ public class PlaylistGenerationService {
             );
         }
 
+        PlainText.require(value, fieldName);
+
         if (value.trim().length() > maxLength) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -644,6 +648,8 @@ public class PlaylistGenerationService {
         if (value == null || value.isBlank()) {
             return;
         }
+
+        PlainText.require(value, fieldName);
 
         if (value.trim().length() > maxLength) {
             throw new ResponseStatusException(
@@ -674,6 +680,8 @@ public class PlaylistGenerationService {
             if (value == null) {
                 continue;
             }
+
+            PlainText.require(value, fieldName + " entries");
 
             if (value.trim().length() > maxItemLength) {
                 throw new ResponseStatusException(

@@ -54,6 +54,13 @@ public class SpotifyArtistSearchService {
             return Mono.just(List.of());
         }
 
+        if (PlainText.hasControlCharacters(query)) {
+            return Mono.error(new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Artist names can't contain line breaks or other control characters."
+            ));
+        }
+
         if (query.trim().length() > MAX_QUERY_LENGTH) {
             return Mono.error(new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,

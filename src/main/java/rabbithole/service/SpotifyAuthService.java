@@ -31,7 +31,6 @@ public class SpotifyAuthService {
 
     private static final long TOKEN_EXPIRY_BUFFER_MS = 60_000L;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(15);
-    private static final Duration SESSION_IDLE_LIMIT = Duration.ofDays(30);
 
     private static final int RANDOM_TOKEN_BYTES = 32;
     private static final Pattern SESSION_TOKEN_FORMAT = Pattern.compile("[A-Za-z0-9_-]{43}");
@@ -237,9 +236,7 @@ public class SpotifyAuthService {
         applyTokenResponse(session, tokens);
         activeSessions.put(SpotifySessionStore.lookupId(token), session);
 
-        long idleCutoffMs = System.currentTimeMillis() - SESSION_IDLE_LIMIT.toMillis();
-
-        return sessionStore.deleteIdleSince(idleCutoffMs)
+        return sessionStore.deleteIdle()
                 .then(sessionStore.save(session))
                 .onErrorResume(error -> {
                     log.error("Could not persist a Spotify session; it will last until the next restart.", error);

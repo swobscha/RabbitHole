@@ -93,6 +93,8 @@ public class SpotifyPlaylistService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Playlist name is required.");
         }
 
+        PlainText.require(request.playlistName(), "Playlist name");
+
         if (request.playlistName().trim().length() > MAX_PLAYLIST_NAME_LENGTH) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,

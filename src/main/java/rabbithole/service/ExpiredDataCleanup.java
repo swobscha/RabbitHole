@@ -15,7 +15,7 @@ import java.time.Duration;
 /**
  * Saved Spotify answers stop being used after a while but would otherwise stay in the database for
  * good. Anyone searching made-up names could then slowly fill it, so expired rows are deleted once a
- * day, starting a minute after startup.
+ * day, starting a minute after startup. Logins idle for 30 days are deleted at the same time.
  */
 @Service
 public class ExpiredDataCleanup implements DisposableBean {
@@ -27,12 +27,18 @@ public class ExpiredDataCleanup implements DisposableBean {
 
     private final SpotifyArtistSearchStore artistSearchStore;
     private final SpotifyTrackMatchStore trackMatchStore;
+    private final SpotifySessionStore sessionStore;
 
     private Disposable schedule;
 
-    public ExpiredDataCleanup(SpotifyArtistSearchStore artistSearchStore, SpotifyTrackMatchStore trackMatchStore) {
+    public ExpiredDataCleanup(
+            SpotifyArtistSearchStore artistSearchStore,
+            SpotifyTrackMatchStore trackMatchStore,
+            SpotifySessionStore sessionStore
+    ) {
         this.artistSearchStore = artistSearchStore;
         this.trackMatchStore = trackMatchStore;
+        this.sessionStore = sessionStore;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -44,13 +50,14 @@ public class ExpiredDataCleanup implements DisposableBean {
 
     /** Deletes expired rows once. Never fails; a failed run is retried the next day. */
     public Mono<Void> runOnce() {
-        return Mono.zip(artistSearchStore.deleteExpired(), trackMatchStore.deleteExpiredMisses())
+        return Mono.zip(artistSearchStore.deleteExpired(), trackMatchStore.deleteExpiredMisses(), sessionStore.deleteIdle())
                 .doOnNext(deleted -> {
-                    if (deleted.getT1() + deleted.getT2() > 0) {
+                    if (deleted.getT1() + deleted.getT2() + deleted.getT3() > 0) {
                         log.info(
-                                "Deleted expired saved data | artistSearches={} | songMisses={}",
+                                "Deleted expired saved data | artistSearches={} | songMisses={} | idleLogins={}",
                                 deleted.getT1(),
-                                deleted.getT2()
+                                deleted.getT2(),
+                                deleted.getT3()
                         );
                     }
                 })

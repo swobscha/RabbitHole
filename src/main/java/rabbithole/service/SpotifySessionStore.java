@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.HexFormat;
 
@@ -30,6 +31,12 @@ public class SpotifySessionStore {
 
     private static final int GCM_IV_BYTES = 12;
     private static final int GCM_TAG_BITS = 128;
+
+    /**
+     * A login not used for this long is signed out. last_used_at moves forward whenever the session
+     * refreshes its Spotify access, which happens within an hour of any use.
+     */
+    public static final Duration IDLE_LIMIT = Duration.ofDays(30);
 
     private final DatabaseClient databaseClient;
     private final SecureRandom secureRandom = new SecureRandom();
@@ -74,9 +81,11 @@ public class SpotifySessionStore {
         return databaseClient.sql("""
                         SELECT spotify_user_id AS "spotifyUserId", refresh_token_enc AS "refreshTokenEnc"
                         FROM spotify_sessions
-                        WHERE id = :id
+                        WHERE id = :id AND last_used_at >= :idleCutoff
                         """)
                 .bind("id", lookupId(token))
+                // Checked here as well as by the daily cleanup, so an idle login stops working on time.
+                .bind("idleCutoff", idleCutoff())
                 .map((row, metadata) -> new StoredSession(
                         row.get("spotifyUserId", String.class),
                         row.get("refreshTokenEnc", String.class)
@@ -121,12 +130,16 @@ public class SpotifySessionStore {
                 .then();
     }
 
-    public Mono<Void> deleteIdleSince(long cutoffMs) {
+    /** Deletes logins idle for longer than {@link #IDLE_LIMIT}. Returns how many rows went. */
+    public Mono<Long> deleteIdle() {
         return databaseClient.sql("DELETE FROM spotify_sessions WHERE last_used_at < :cutoff")
-                .bind("cutoff", cutoffMs)
+                .bind("cutoff", idleCutoff())
                 .fetch()
-                .rowsUpdated()
-                .then();
+                .rowsUpdated();
+    }
+
+    private static long idleCutoff() {
+        return System.currentTimeMillis() - IDLE_LIMIT.toMillis();
     }
 
     private String encrypt(String token, String plaintext) {

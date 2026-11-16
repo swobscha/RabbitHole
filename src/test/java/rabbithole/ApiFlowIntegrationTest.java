@@ -999,6 +999,66 @@ class ApiFlowIntegrationTest {
     }
 
     @Test
+    void aLoginIdleForThirtyDaysStopsWorkingAndIsDeleted() {
+        String token = login(uniqueCode());
+        long thirtyOneDaysAgo = System.currentTimeMillis() - Duration.ofDays(31).toMillis();
+
+        databaseClient.sql("UPDATE spotify_sessions SET last_used_at = :old WHERE id = :id")
+                .bind("old", thirtyOneDaysAgo)
+                .bind("id", SpotifySessionStore.lookupId(token))
+                .fetch()
+                .rowsUpdated()
+                .block();
+
+        // Refused when used, even before any cleanup has run.
+        assertNull(sessionStore.load(token).block());
+
+        expiredDataCleanup.runOnce().block();
+
+        Long rows = databaseClient.sql("SELECT COUNT(*) AS \"rows\" FROM spotify_sessions WHERE id = :id")
+                .bind("id", SpotifySessionStore.lookupId(token))
+                .map(row -> row.get("rows", Long.class))
+                .one()
+                .block();
+
+        assertEquals(0L, rows);
+    }
+
+    @Test
+    void textWithLineBreaksIsRefusedSoItCantForgeLogLines() {
+        Map<String, Object> request = generationRequest("Daft Punk\n2026-11-16 INFO Fake log line", 3);
+
+        client().post().uri("/api/playlists/generate")
+                .bodyValue(request)
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.message").isEqualTo("Seed artist can't contain line breaks or other control characters.");
+
+        client().get()
+                .uri(builder -> builder.path("/api/spotify/artists/search").queryParam("query", "Daft\r\nPunk").build())
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        String token = login(uniqueCode());
+
+        client().post().uri("/api/playlists/create")
+                .headers(headers -> headers.setBearerAuth(token))
+                .bodyValue(Map.of("playlistName", "Mix Two", "tracks", List.of(), "targetTrackCount", 0))
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    void apiResponsesAreNeverCachedAndKeepTheirContentType() {
+        client().get().uri("/api/spotify/status")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().valueEquals("Cache-Control", "no-store")
+                .expectHeader().valueEquals("X-Content-Type-Options", "nosniff");
+    }
+
+    @Test
     void sessionsSurviveARestartWithoutStoringCredentialsInTheClear() {
         String code = uniqueCode();
         String token = login(code);

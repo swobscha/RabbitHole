@@ -53,3 +53,18 @@ CREATE TABLE IF NOT EXISTS spotify_track_matches (
     spotify_uri VARCHAR(100),
     checked_at BIGINT NOT NULL
 );
+
+-- Artist search results as JSON, keyed by a hash of the search, so repeat searches skip Spotify.
+CREATE TABLE IF NOT EXISTS spotify_artist_searches (
+    id VARCHAR(64) PRIMARY KEY,
+    results VARCHAR(20000) NOT NULL,
+    checked_at BIGINT NOT NULL
+);
+
+-- Usage counts kept across restarts: the daily Spotify allowance ("spotify-hour:<hour start>") and
+-- the site-wide hourly limits ("site:<route>"). window_start is when the counted window began.
+CREATE TABLE IF NOT EXISTS usage_counters (
+    name VARCHAR(100) PRIMARY KEY,
+    window_start BIGINT NOT NULL,
+    request_count INT NOT NULL
+);

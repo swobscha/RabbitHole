@@ -73,7 +73,7 @@ const LOGIN_ERROR_MESSAGES = {
     "no-code": "Spotify did not return an authorization code.",
     "not-allowed":
         "This Spotify account is not allowed to use RabbitHole yet. Only approved accounts can connect for now.",
-    paused: "Spotify has asked RabbitHole to pause requests for a while. Try connecting again later.",
+    paused: "RabbitHole has reached Spotify's limits for now. Try connecting again later.",
     failed: "Spotify connection failed. Please try again.",
     "not-started":
         "That Spotify login wasn't started in this browser, so it was ignored. Connect Spotify again if you meant to.",
@@ -254,6 +254,8 @@ function App() {
     const [spotifyConnected, setSpotifyConnected] = useState(false);
     // When Spotify's requested pause ends (epoch ms), or 0. Searching and generating wait until then.
     const [spotifyPausedUntil, setSpotifyPausedUntil] = useState(0);
+    // "spotify" when Spotify asked for the wait, "daily-limit" when RabbitHole's own allowance ran out.
+    const [spotifyPauseReason, setSpotifyPauseReason] = useState("");
     const spotifyPaused = spotifyPausedUntil > 0;
     const [loginError, setLoginError] = useState(initialLoginError);
     const [wizardStage, setUiStage] = useState(2);
@@ -514,6 +516,7 @@ function App() {
 
             setSpotifyConnected(data.connected);
             setSpotifyPausedUntil(Number(data.spotifyPausedUntil) || 0);
+            setSpotifyPauseReason(data.spotifyPauseReason || "");
 
             if (data.connected) {
                 fetchPlaylistHistory();
@@ -1000,7 +1003,9 @@ function App() {
 
             {spotifyPaused && (
                 <p className="notice pause-notice" role="status">
-                    Spotify has paused RabbitHole&apos;s requests until{" "}
+                    {spotifyPauseReason === "daily-limit"
+                        ? "RabbitHole has used today's Spotify allowance, which keeps it within Spotify's limits. Searching and new playlists will be back by "
+                        : "Spotify has paused RabbitHole's requests until "}
                     <strong>
                         {new Date(spotifyPausedUntil).toLocaleString([], {
                             weekday: "short",
@@ -1008,7 +1013,9 @@ function App() {
                             minute: "2-digit",
                         })}
                     </strong>
-                    . This is a limit on Spotify&apos;s side, so new playlists can&apos;t be made until then.
+                    {spotifyPauseReason === "daily-limit"
+                        ? "."
+                        : ". This is a limit on Spotify's side, so new playlists can't be made until then."}
                 </p>
             )}
 

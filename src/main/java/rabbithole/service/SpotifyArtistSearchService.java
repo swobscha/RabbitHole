@@ -1,5 +1,7 @@
 package rabbithole.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -13,6 +15,7 @@ import tools.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 @Service
@@ -22,15 +25,24 @@ public class SpotifyArtistSearchService {
     // Matches the seed artist limit on generate and prefetch.
     private static final int MAX_QUERY_LENGTH = 100;
 
+    // Each search is a Spotify request, and visitors often search the same names, or search again.
+    private final Cache<String, List<SpotifyArtistSearchResult>> recentSearches = Caffeine.newBuilder()
+            .maximumSize(2_000)
+            .expireAfterWrite(Duration.ofHours(24))
+            .build();
+
     private final SpotifyAuthService spotifyAuthService;
+    private final SpotifyArtistSearchStore searchStore;
     private final WebClient webClient;
 
     public SpotifyArtistSearchService(
             SpotifyAuthService spotifyAuthService,
+            SpotifyArtistSearchStore searchStore,
             SpotifyRateLimitGuard rateLimitGuard,
             @Value("${SPOTIFY_API_URL:https://api.spotify.com/v1}") String apiUrl
     ) {
         this.spotifyAuthService = spotifyAuthService;
+        this.searchStore = searchStore;
         this.webClient = WebClient.builder()
                 .baseUrl(apiUrl)
                 .filter(rateLimitGuard.filter())
@@ -49,6 +61,25 @@ public class SpotifyArtistSearchService {
             ));
         }
 
+        String trimmed = query.trim();
+        String key = normalize(trimmed);
+        List<SpotifyArtistSearchResult> remembered = recentSearches.getIfPresent(key);
+
+        if (remembered != null) {
+            return Mono.just(remembered);
+        }
+
+        // Memory first, then results saved before a restart, and only then Spotify.
+        return searchStore.find(key)
+                .doOnNext(saved -> recentSearches.put(key, saved))
+                .switchIfEmpty(Mono.defer(() -> searchSpotify(session, trimmed)
+                        .doOnNext(results -> {
+                            recentSearches.put(key, results);
+                            searchStore.save(key, results);
+                        })));
+    }
+
+    private Mono<List<SpotifyArtistSearchResult>> searchSpotify(Optional<SpotifySession> session, String query) {
         return spotifyAuthService.getAccessToken(session)
                 .flatMap(accessToken ->
                         webClient.get()
@@ -57,13 +88,23 @@ public class SpotifyArtistSearchService {
                                         .queryParam("q", "{query}")
                                         .queryParam("type", "artist")
                                         .queryParam("limit", 5)
-                                        .build(query.trim()))
+                                        .build(query))
                                 .headers(headers -> headers.setBearerAuth(accessToken))
                                 .retrieve()
                                 .bodyToMono(JsonNode.class)
                                 .timeout(REQUEST_TIMEOUT)
                                 .map(this::parseArtistResults)
                 );
+    }
+
+    /** "Daft  Punk" and "daft punk" are the same search. */
+    private static String normalize(String query) {
+        return query.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+    }
+
+    /** Clears the in-memory copy, as a restart would. Used by tests. */
+    public void forgetRecentSearches() {
+        recentSearches.invalidateAll();
     }
 
     private List<SpotifyArtistSearchResult> parseArtistResults(JsonNode json) {

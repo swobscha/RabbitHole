@@ -18,8 +18,10 @@ import rabbithole.model.PlaylistGenerationResult;
 import rabbithole.model.PlaylistReplaceTrackResult;
 import rabbithole.model.SpotifySession;
 import rabbithole.model.WeightedTrack;
+import rabbithole.service.SpotifyArtistSearchService;
 import rabbithole.service.SpotifySessionStore;
 import rabbithole.service.SpotifyTrackSearchService;
+import rabbithole.service.UsageCounterStore;
 
 import java.io.IOException;
 import java.net.URI;
@@ -53,6 +55,8 @@ import static org.junit.jupiter.api.Assertions.fail;
         "RATE_LIMIT_TRUSTED_PROXY_HOPS=0",
         "SITE_WIDE_GENERATIONS_PER_HOUR=1000",
         "SITE_WIDE_REPLACEMENTS_PER_HOUR=1000",
+        "SITE_WIDE_ARTIST_SEARCHES_PER_HOUR=1000",
+        "SPOTIFY_DAILY_REQUEST_LIMIT=100000",
         "DEBUG_RANKINGS_ENABLED=false"
 })
 class ApiFlowIntegrationTest {
@@ -74,6 +78,12 @@ class ApiFlowIntegrationTest {
 
     @Autowired
     private SpotifyTrackSearchService spotifyTrackSearchService;
+
+    @Autowired
+    private SpotifyArtistSearchService spotifyArtistSearchService;
+
+    @Autowired
+    private UsageCounterStore usageCounterStore;
 
     @DynamicPropertySource
     static void pointAtFakeApis(DynamicPropertyRegistry registry) {
@@ -342,6 +352,65 @@ class ApiFlowIntegrationTest {
     }
 
     @Test
+    void repeatArtistSearchesAreAnsweredWithoutSpotifyEvenAfterARestart() {
+        String name = "Cached " + uniqueCode();
+        int searchesBefore = FAKE.artistSearchRequests.get();
+
+        searchArtist(name).jsonPath("$[0].name").isEqualTo(name);
+        assertEquals(1, FAKE.artistSearchRequests.get() - searchesBefore);
+
+        // Same search with different spacing and capitals: answered from memory.
+        searchArtist("  " + name.toUpperCase().replace(" ", "   ") + " ").jsonPath("$[0].name").isEqualTo(name);
+
+        // After a restart, memory is empty, but the saved results still answer it.
+        spotifyArtistSearchService.forgetRecentSearches();
+        waitUntil(() -> artistSearchRows(name) == 1);
+        searchArtist(name).jsonPath("$[0].name").isEqualTo(name);
+
+        assertEquals(1, FAKE.artistSearchRequests.get() - searchesBefore);
+    }
+
+    private WebTestClient.BodyContentSpec searchArtist(String query) {
+        return client().get()
+                .uri(builder -> builder.path("/api/spotify/artists/search").queryParam("query", query).build())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody();
+    }
+
+    private long artistSearchRows(String name) {
+        return databaseClient.sql("SELECT COUNT(*) AS \"rows\" FROM spotify_artist_searches WHERE results LIKE :name")
+                .bind("name", "%" + name + "%")
+                .map(row -> row.get("rows", Long.class))
+                .one()
+                .block();
+    }
+
+    @Test
+    void usageCountsAreSavedAndAnOlderCountNeverReplacesANewerOne() {
+        String name = "test:" + uniqueCode();
+
+        usageCounterStore.save(name, 1_000, 2);
+        waitUntil(() -> savedCount(name) != null && savedCount(name).requestCount() == 2);
+
+        // Arrives late from the same window with a lower count: ignored.
+        usageCounterStore.save(name, 1_000, 1);
+        // A new window starts over at 1.
+        usageCounterStore.save(name, 2_000, 1);
+        waitUntil(() -> savedCount(name).windowStart() == 2_000);
+
+        assertEquals(1, savedCount(name).requestCount());
+
+        // Spotify requests are counted per hour for the daily allowance.
+        searchArtist("Counted " + uniqueCode());
+        waitUntil(() -> !usageCounterStore.load("spotify-hour:").isEmpty());
+    }
+
+    private UsageCounterStore.SavedCount savedCount(String name) {
+        return usageCounterStore.load(name).stream().findFirst().orElse(null);
+    }
+
+    @Test
     void artistSearchRejectsOverlongNamesWithoutAskingSpotify() {
         int searchesBefore = FAKE.artistSearchRequests.get();
 
@@ -509,6 +578,7 @@ class ApiFlowIntegrationTest {
         long pausedUntil = spotifyPausedUntil();
 
         assertTrue(pausedUntil > System.currentTimeMillis());
+        assertEquals("spotify", spotifyStatus().get("spotifyPauseReason"));
         waitUntil(() -> {
             Long saved = savedSpotifyPause();
             return saved != null && saved >= pausedUntil;
@@ -555,15 +625,17 @@ class ApiFlowIntegrationTest {
         assertEquals(searchesAfterRestart, FAKE.trackSearchRequests.get());
     }
 
-    private long spotifyPausedUntil() {
-        Map<?, ?> status = client().get().uri("/api/spotify/status")
+    private Map<?, ?> spotifyStatus() {
+        return client().get().uri("/api/spotify/status")
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody(Map.class)
                 .returnResult()
                 .getResponseBody();
+    }
 
-        return ((Number) status.get("spotifyPausedUntil")).longValue();
+    private long spotifyPausedUntil() {
+        return ((Number) spotifyStatus().get("spotifyPausedUntil")).longValue();
     }
 
     private Long savedSpotifyPause() {

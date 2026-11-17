@@ -3,6 +3,7 @@
 target
 data
 debug-rankings
+docs
 
 .env
 .env.*

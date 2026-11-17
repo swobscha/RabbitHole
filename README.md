@@ -6,6 +6,8 @@
 
 **Try it live: [rabbithole.samwobschall.dev](https://rabbithole.samwobschall.dev)**
 
+![Searching for Tame Impala, picking the artist, naming the playlist and choosing its size, picking a preset and adjusting similarity, generating a playlist of similar artists, replacing a track and previewing a song](docs/demo.gif)
+
 RabbitHole builds Spotify playlists of new music from an artist you choose. You pick a seed artist, choose how
 popular or obscure and how similar or different the songs should be, and RabbitHole finds matching tracks and
 creates the playlist on your Spotify account.

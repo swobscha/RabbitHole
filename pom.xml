@@ -8,7 +8,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.9</version>
+		<version>4.1.2</version>
 		<relativePath/>
 	</parent>
 
@@ -32,12 +32,12 @@
 			<dependency>
 				<groupId>com.ongres.scram</groupId>
 				<artifactId>scram-client</artifactId>
-				<version>3.3</version>
+				<version>3.4</version>
 			</dependency>
 			<dependency>
 				<groupId>com.ongres.scram</groupId>
 				<artifactId>scram-common</artifactId>
-				<version>3.3</version>
+				<version>3.4</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
@@ -51,7 +51,7 @@
 		<dependency>
 			<groupId>io.sentry</groupId>
 			<artifactId>sentry-spring-boot-4-starter</artifactId>
-			<version>8.63.0</version>
+			<version>8.65.0</version>
 		</dependency>
 
 		<dependency>
